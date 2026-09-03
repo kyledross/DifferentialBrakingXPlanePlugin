@@ -1,0 +1,36 @@
+# Documentation (internal design notes, not meant to be published/tracked)
+Documentation/
+
+# Build output
+build/
+cmake-build-*/
+out/
+*.xpl
+*.dylib
+*.so
+*.dll
+*.o
+*.obj
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+compile_commands.json
+CMakeUserPresets.json
+
+# IDE / editor files
+.idea/
+*.iml
+.vscode/
+*.swp
+*~
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
