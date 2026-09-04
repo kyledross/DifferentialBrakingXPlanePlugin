@@ -1,0 +1,32 @@
+name: Publish Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Build and test Linux plugin
+        run: ./docker-build.sh
+
+      - name: Create release package
+        run: |
+          mkdir -p release-staging/DiffBrakePlugin
+          cp docker-output/* release-staging/DiffBrakePlugin/
+          tar -czf DiffBrakePlugin_Linux_Install.tar.gz -C release-staging DiffBrakePlugin
+
+      - name: Create draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: DiffBrakePlugin_Linux_Install.tar.gz
+          generate_release_notes: true
+          draft: true
+          prerelease: false

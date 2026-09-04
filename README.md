@@ -19,12 +19,12 @@ https://buymeacoffee.com/kyledross
 - The X-Plane 12 SDK headers (already vendored under `SDK/`)
 
 ## Building
+### Local build
 
 ```bash
-mkdir -p build
-cd build
-cmake ..
-cmake --build . --config Release
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure
 ```
 
 This produces a shared library named `DiffBrakePlugin.xpl`:
@@ -34,6 +34,21 @@ This produces a shared library named `DiffBrakePlugin.xpl`:
   `-undefined dynamic_lookup` since X-Plane resolves SDK symbols at load
   time)
 - Windows: `DiffBrakePlugin.xpl` (PE DLL)
+### Reproducible Linux build
+
+Use Docker to build and test the release artifact in a clean Ubuntu
+environment:
+
+```bash
+./docker-build.sh
+```
+
+The script writes the tested Linux release payload to `docker-output/`:
+
+- `DiffBrakePlugin.xpl`
+- `install.sh`
+- `LICENSE`
+- `NOTICE`
 
 ## Building and deploying automatically
 
@@ -48,6 +63,19 @@ freshly built `.xpl` into place.
 ```
 
 ## Installing into X-Plane
+
+For a GitHub Linux release, extract `DiffBrakePlugin_Linux_Install.tar.gz` and
+run the included installer:
+
+```bash
+tar -xzf DiffBrakePlugin_Linux_Install.tar.gz
+cd DiffBrakePlugin
+./install.sh
+```
+
+The installer obtains the X-Plane 12 directory from
+`~/.x-plane/x-plane_install_12.txt` and installs the plugin in the expected
+Linux location. It does not modify the aircraft or any X-Plane settings.
 
 X-Plane expects plugins to live in a per-platform subfolder under a folder
 named after the plugin, inside `Resources/plugins`:
@@ -71,6 +99,22 @@ Steps:
    Jet, and check `Log.txt` (in the X-Plane root folder) for lines prefixed
    `DiffBrakePlugin: ` to confirm the plugin loaded and detected the
    aircraft.
+
+## GitHub builds and releases
+
+GitHub Actions builds and tests the Linux plugin for pushes and pull requests
+targeting `main`, `master`, or `development`. Successful builds retain the
+`docker-output` directory as a workflow artifact.
+
+Push a version tag beginning with `v` to build the same payload and create a
+draft GitHub release with `DiffBrakePlugin_Linux_Install.tar.gz` attached:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+Review and publish the draft release in GitHub after the workflow completes.
 
 ## How it works
 

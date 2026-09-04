@@ -5,6 +5,8 @@ Documentation/
 build/
 cmake-build-*/
 out/
+docker-build/
+docker-output/
 *.xpl
 *.dylib
 *.so

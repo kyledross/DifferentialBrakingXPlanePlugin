@@ -39,6 +39,9 @@ set_target_properties(DiffBrakePlugin PROPERTIES
         PREFIX ""
         SUFFIX ".xpl"
         OUTPUT_NAME "DiffBrakePlugin")
+if (UNIX AND NOT APPLE)
+    target_link_options(DiffBrakePlugin PRIVATE -static-libgcc -static-libstdc++)
+endif ()
 
 enable_testing()
 add_executable(test_castering_detection tests/test_castering_detection.cpp)
