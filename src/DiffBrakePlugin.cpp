@@ -60,9 +60,9 @@ namespace
     // twist, never triggers any braking at all.
     constexpr float kYawInputDeadzone = 0.05f;
 
-    // Above the deadzone, the response curve is quadratic (rather than
-    // linear) so that small rudder deflections produce only a gentle brake
-    // nudge, while the full 0-75% range is still reachable at full rudder
+    // Above the deadzone, the response curve uses a 1.5 power rather than a
+    // linear response, so small rudder deflections produce only a gentle brake
+    // nudge, while the full 0-8.5% range is still reachable at full rudder
     // deflection. This is what actually fixes "the slightest movement
     // applies way too much brake": a linear mapping means even a tiny
     // deflection commands a proportionally large fraction of the max brake
@@ -74,8 +74,8 @@ namespace
     // This rate-limits how quickly brakes can go from 0 to full,
     // smoothing out any remaining input noise/spikes and preventing a
     // sudden wheel lock-up/jerk even if the rudder input itself jumps
-    // abruptly from one frame to the next. With kMaxBrakeForce=0.30, a
-    // value of 0.6 means 0-to-full takes ~0.5 s, which feels natural.
+    // abruptly from one frame to the next. With kMaxBrakeForce=0.085, a
+    // value of 0.25 reaches full braking force in about 0.34 seconds.
     constexpr float kMaxBrakeChangePerSecond = 0.25f;
 
     // Rate at which the brake balance is allowed to move back toward zero
@@ -326,6 +326,23 @@ namespace
             XPLMSetDatai(gOverrideGearBrakeDataRef, overrideEnabled ? 1 : 0);
         }
     }
+    // Removes any additive brake force and resets state that carries between
+    // flight loop callbacks.
+    void ReleaseDifferentialBraking()
+    {
+        gIsDifferentialBrakingActive = false;
+        gLastAppliedBrakeBalance = 0.0f;
+        gTimeSinceLastDiffBrakeLog = kDiffBrakeLogInterval;
+
+        if (gLeftBrakeAddDataRef != nullptr)
+        {
+            XPLMSetDataf(gLeftBrakeAddDataRef, 0.0f);
+        }
+        if (gRightBrakeAddDataRef != nullptr)
+        {
+            XPLMSetDataf(gRightBrakeAddDataRef, 0.0f);
+        }
+    }
 
     // Evaluates the aircraft steering type, logs changes, and updates plugin state and overrides.
     void UpdateAircraftSteeringType()
@@ -350,17 +367,8 @@ namespace
         {
             // Reset state so we don't leave brakes engaged if the user
             // switches to a different aircraft.
-            gIsDifferentialBrakingActive = false;
             gHasLoggedGroundState = false;
-            gTimeSinceLastDiffBrakeLog = kDiffBrakeLogInterval;
-            if (gLeftBrakeAddDataRef != nullptr)
-            {
-                XPLMSetDataf(gLeftBrakeAddDataRef, 0.0f);
-            }
-            if (gRightBrakeAddDataRef != nullptr)
-            {
-                XPLMSetDataf(gRightBrakeAddDataRef, 0.0f);
-            }
+            ReleaseDifferentialBraking();
         }
     }
 
@@ -458,16 +466,7 @@ namespace
         {
             // Make sure we are not leaving any stale added braking force
             // applied once we stop managing the brakes.
-            if (gLeftBrakeAddDataRef != nullptr)
-            {
-                XPLMSetDataf(gLeftBrakeAddDataRef, 0.0f);
-            }
-            if (gRightBrakeAddDataRef != nullptr)
-            {
-                XPLMSetDataf(gRightBrakeAddDataRef, 0.0f);
-            }
-            gLastAppliedBrakeBalance = 0.0f;
-            gTimeSinceLastDiffBrakeLog = kDiffBrakeLogInterval;
+            ReleaseDifferentialBraking();
             return kFlightLoopInterval;
         }
 
@@ -575,6 +574,8 @@ PLUGIN_API int XPluginStart(char* outName, char* outSig, char* outDesc)
 
 PLUGIN_API void XPluginStop()
 {
+    SetSimSteeringOverrides(false);
+    ReleaseDifferentialBraking();
     XPLMUnregisterFlightLoopCallback(FlightLoopCallback, nullptr);
 }
 
@@ -592,9 +593,13 @@ PLUGIN_API int XPluginEnable()
 
 PLUGIN_API void XPluginDisable()
 {
-    // Give control of the gear brake helper and nosewheel-steering logic
-    // back to X-Plane while we are disabled.
+    // Return control to X-Plane and remove any additive braking applied
+    // during the last flight loop.
     SetSimSteeringOverrides(false);
+    ReleaseDifferentialBraking();
+    gIsCasteringAircraft = false;
+    gHasLoggedAircraftDetected = false;
+    gHasLoggedGroundState = false;
 }
 
 PLUGIN_API void XPluginReceiveMessage(XPLMPluginID /*inFromWho*/, int inMessage, void* inParam)

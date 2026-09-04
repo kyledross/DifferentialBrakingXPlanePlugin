@@ -141,14 +141,14 @@ Review and publish the draft release in GitHub after the workflow completes.
   differentially below 50% throttle.
 - Rudder/yaw input is read from `sim/joystick/yoke_heading_ratio` and mapped
   onto `sim/flightmodel/controls/l_brake_add` and
-  `sim/flightmodel/controls/r_brake_add`, capped at 75% brake force even at
+  `sim/flightmodel/controls/r_brake_add`, capped at 8.5% brake force even at
   full rudder deflection to avoid accidental maximum braking. These "add"
   datarefs apply additional brake force on top of whatever the pilot's brake
   pedals/axis are already commanding, so the plugin never has to take
   ownership of (i.e. override) the normal brake controls.
 - The rudder-to-brake mapping is deliberately gentle, not linear: inputs
   within a small deadzone around center apply no brake at all (absorbing
-  joystick centering noise), inputs beyond that ramp in along a quadratic
+  joystick centering noise), inputs beyond that ramp in along a power
   curve (so a slight rudder movement only applies a small brake nudge, not
   a large fraction of the max force), and the resulting brake force is
   rate-limited so it can only change by a bounded amount per second. Together
@@ -212,9 +212,9 @@ The following constants at the top of `src/DiffBrakePlugin.cpp` can be
 adjusted if needed:
 
 - `kMaxGroundspeedForBrakingKnots` – speed below which differential braking
-  is engaged (default 15 kts).
+  is engaged (default 45 kts).
 - `kMaxBrakeForce` – maximum additive brake force applied per side, in the
-  0.0–1.0 range (default 0.05, i.e. 5%). Kept deliberately low: steering
+  0.0–1.0 range (default 0.085, i.e. 8.5%). Kept deliberately low: steering
   only needs a gentle retarding force on one wheel to create a turning
   moment — heavier braking slows the aircraft dramatically and causes a
   "jerk to a stop" feel when reversing direction.
@@ -226,11 +226,11 @@ adjusted if needed:
 - `kBrakeResponseCurveExponent` – exponent of the easing curve applied to
   rudder input beyond the deadzone before scaling to brake force; higher
   values make small rudder movements apply proportionally less brake
-  (default 2.0, i.e. quadratic).
+  (default 1.5).
 - `kMaxBrakeChangePerSecond` – maximum rate (in brake-force units per
   second, 0.0–1.0 scale) at which the applied brake force is allowed to
-  change, smoothing out sudden input spikes (default 0.6, i.e. 0 to full
-  in ~0.5 s at the 0.05 max brake force).
+  change, smoothing out sudden input spikes (default 0.25, i.e. 0 to full
+  in ~0.34 s at the 0.085 max brake force).
 - `kEnableDiffBrakingLog` – boolean flag to turn on/off continuous differential
   braking debug log messages while braking is applied (default `false`).
 - `kDiffBrakeLogInterval` – minimum interval (in seconds) between differential

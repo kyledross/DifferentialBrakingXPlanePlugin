@@ -275,10 +275,18 @@ int main() {
         printf("  [PASS] Zero rudder input on ground produces no brake force and no debug log flood\n");
     }
 
-    // Test 8: Disable plugin restores overrides
+    // Test 8: Disable plugin releases active braking and restores overrides
+    g_mockFloatDataRefs["sim/joystick/yoke_heading_ratio"] = 1.0f;
+    result = g_registeredFlightLoopCallback(1.0f, 1.0f, 21, nullptr);
+    TEST_ASSERT(g_mockFloatDataRefs["sim/flightmodel/controls/r_brake_add"] > 0.0f);
     XPluginDisable();
     TEST_ASSERT(g_mockIntDataRefs["sim/operation/override/override_gearbrake"] == 0);
-    printf("  [PASS] Plugin disable restores overrides\n");
+    TEST_ASSERT(g_mockFloatDataRefs["sim/flightmodel/controls/l_brake_add"] == 0.0f);
+    TEST_ASSERT(g_mockFloatDataRefs["sim/flightmodel/controls/r_brake_add"] == 0.0f);
+    TEST_ASSERT(gLastAppliedBrakeBalance == 0.0f);
+    TEST_ASSERT(!gIsDifferentialBrakingActive);
+    TEST_ASSERT(!gIsCasteringAircraft);
+    printf("  [PASS] Plugin disable releases braking and restores overrides\n");
 
     XPluginStop();
     TEST_ASSERT(g_registeredFlightLoopCallback == nullptr);
