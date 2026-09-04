@@ -7,7 +7,11 @@ steering gear (such as the Cirrus SR22, Cirrus Vision Jet SF50, Lancair
 Evolution, RV-10, etc.). While the aircraft is on the ground and rolling
 slowly, rudder/yaw input from your joystick is mapped onto the left and right brakes so you can steer the 
 castering wheel the same way you would in the real airplane. The plugin is inert for steerable
-aircraft.
+aircraft.  
+
+The behavior of the plugin is set with various constants regarding maximum brake force, rate of change, and so-on.
+The defaults seem to be fairly reasonable, so I have not implemented any UI to change them.
+Perhaps that will come in a later revision.
 
 If this software enhances your experience, please consider supporting the project:  
 https://buymeacoffee.com/kyledross
