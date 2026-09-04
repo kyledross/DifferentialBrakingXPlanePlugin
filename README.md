@@ -2,9 +2,14 @@
 Copyright 2026 Kyle D. Ross  
 See LICENSE for details.
 
-An X-Plane 12 plugin that adds enhanced differential braking to aircraft with free-castering
+Note:
+This software is not affiliated with, endorsed by, or supported by Laminar Research. All trademarks are the property of their respective owners and are used herein for reference only.
+
+This is an X-Plane 12 plugin that adds enhanced differential braking to aircraft with free-castering
 steering gear (such as the Cirrus SR22, Cirrus Vision Jet SF50, Lancair
-Evolution, RV-10, etc.). While the aircraft is on the ground and rolling
+Evolution, RV-10, etc.). Controlling a free-castering aircraft feels jerky and difficult with a desktop joystick's rudder axis. I don't have real-world experience with it, but I wanted it to be a smoother, more predictable experience, so I decided to write a plug-in.
+
+While the aircraft is on the ground and rolling
 slowly, rudder/yaw input from your joystick is mapped onto the left and right brakes so you can steer the 
 castering wheel the same way you would in the real airplane. The plugin is inert for steerable
 aircraft.  
