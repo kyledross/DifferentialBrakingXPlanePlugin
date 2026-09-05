@@ -4,6 +4,8 @@ project(DiffBrakePlugin)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+set(DIFF_BRAKE_PLUGIN_VERSION "development" CACHE STRING
+        "Version displayed in X-Plane plugin information")
 
 add_library(DiffBrakePlugin SHARED
         src/DiffBrakePlugin.cpp)
@@ -16,6 +18,7 @@ target_include_directories(DiffBrakePlugin PRIVATE
 # are compiling a plugin (not the XPLM library itself), plus which SDK
 # feature levels we want to use.
 target_compile_definitions(DiffBrakePlugin PRIVATE
+        DIFF_BRAKE_PLUGIN_VERSION="${DIFF_BRAKE_PLUGIN_VERSION}"
         XPLM_API_VERSION=400
         XPLM200=1
         XPLM210=1
@@ -49,6 +52,7 @@ target_include_directories(test_castering_detection PRIVATE
         SDK/CHeaders/XPLM
         SDK/CHeaders/Widgets)
 target_compile_definitions(test_castering_detection PRIVATE
+        DIFF_BRAKE_PLUGIN_VERSION="${DIFF_BRAKE_PLUGIN_VERSION}"
         XPLM_API_VERSION=400
         XPLM200=1
         XPLM210=1

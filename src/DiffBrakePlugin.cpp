@@ -565,7 +565,8 @@ namespace
 
 PLUGIN_API int XPluginStart(char* outName, char* outSig, char* outDesc)
 {
-    std::strcpy(outName, "Enhanced Differential Brake Steering");
+    std::snprintf(outName, 256, "Enhanced Differential Brake Steering %s",
+                  DIFF_BRAKE_PLUGIN_VERSION);
     std::strcpy(outSig, "com.kyleross.diffbrakeplugin");
     std::strcpy(outDesc, "Provides smooth differential braking via rudder control.");
 

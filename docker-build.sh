@@ -21,6 +21,7 @@ IMAGE_NAME="diff-brake-plugin-builder"
 BUILD_DIR="${SCRIPT_DIR}/docker-build"
 OUTPUT_DIR="${SCRIPT_DIR}/docker-output"
 USER_NAMESPACE_ARGS=()
+PLUGIN_VERSION="${PLUGIN_VERSION:-development}"
 
 if ! command -v docker >/dev/null 2>&1; then
     echo "Error: Docker is not installed or not available on PATH." >&2
@@ -48,10 +49,13 @@ docker run --rm \
     --volume "${SCRIPT_DIR}:/source:ro" \
     --volume "${BUILD_DIR}:/build" \
     --volume "${OUTPUT_DIR}:/output" \
+    --env "PLUGIN_VERSION=${PLUGIN_VERSION}" \
     "${IMAGE_NAME}" \
     bash -c '
         set -euo pipefail
-        cmake -S /source -B /build -DCMAKE_BUILD_TYPE=Release
+        cmake -S /source -B /build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DDIFF_BRAKE_PLUGIN_VERSION="$PLUGIN_VERSION"
         cmake --build /build --parallel
         ctest --test-dir /build --output-on-failure
         install -m 755 /build/DiffBrakePlugin.xpl /output/DiffBrakePlugin.xpl
