@@ -137,7 +137,7 @@ int main() {
     int enableResult = XPluginEnable();
     TEST_ASSERT(enableResult == 1);
     TEST_ASSERT(!gIsCasteringAircraft);
-    TEST_ASSERT(g_mockIntDataRefs["sim/operation/override/override_gearbrake"] == 0);
+    TEST_ASSERT(g_mockIntDataRefs["sim/operation/override/override_gearbrake"] == 1);
     printf("  [PASS] Steerable aircraft detection on plugin enable\n");
 
     // Flight loop should be inert for steerable aircraft
@@ -199,7 +199,7 @@ int main() {
     g_mockFloatDataRefs["sim/aircraft/gear/acf_nw_steerdeg2"] = 0.00f;
     XPluginReceiveMessage(0, XPLM_MSG_PLANE_LOADED, reinterpret_cast<void*>(0));
     TEST_ASSERT(!gIsCasteringAircraft);
-    TEST_ASSERT(g_mockIntDataRefs["sim/operation/override/override_gearbrake"] == 0);
+    TEST_ASSERT(g_mockIntDataRefs["sim/operation/override/override_gearbrake"] == 1);
     TEST_ASSERT(g_mockFloatDataRefs["sim/flightmodel/controls/l_brake_add"] == 0.0f);
     TEST_ASSERT(g_mockFloatDataRefs["sim/flightmodel/controls/r_brake_add"] == 0.0f);
     printf("  [PASS] Deflection exceeding threshold > 0.05 deg detected as steerable & cleans up state\n");
@@ -243,7 +243,7 @@ int main() {
 
         XPluginReceiveMessage(0, XPLM_MSG_PLANE_LOADED, reinterpret_cast<void*>(0));
         TEST_ASSERT(!gIsCasteringAircraft);
-        TEST_ASSERT(g_mockIntDataRefs["sim/operation/override/override_gearbrake"] == 0);
+        TEST_ASSERT(g_mockIntDataRefs["sim/operation/override/override_gearbrake"] == 1);
         printf("  [PASS] Steerable Cessna 172 with _gear_castors 0 detected as steerable\n");
         std::remove(c172AcfPath);
     }

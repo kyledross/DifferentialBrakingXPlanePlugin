@@ -174,15 +174,12 @@ Review and publish the draft release in GitHub after the workflow completes.
   applying brakes. This prevents "dual-steering" from both the rudder and
   the brakes fighting each other; the rudder is returned to normal joystick
   control as soon as differential braking becomes inactive.
-- Whenever a castering gear aircraft is loaded, the plugin sets
-  `sim/operation/override/override_gearbrake` to `1`, which tells X-Plane's
-  physics engine to bypass its own built-in step-function auto-toe-brake
-  helper logic entirely (the crude native behavior this plugin is meant to
-  replace) without having to modify the aircraft's `.acf` file in
-  Plane-Maker. Debug logging confirmed this works: `actual_left_brake`/
-  `actual_right_brake` always matched exactly what the plugin requested,
-  even across rudder direction reversals, so no extra native braking was
-  ever being added.
+- While enabled, the plugin sets
+  `sim/operation/override/override_gearbrake` to `1` for every aircraft.
+  This bypasses X-Plane's built-in auto-toe-brake helper, which can apply
+  abrupt braking at steering extremes. The plugin supplies differential
+  braking only for detected castering aircraft; normal braking remains under
+  simulator control for other aircraft.
 - The plugin does **not** set `sim/operation/override/override_wheel_steer`.
   It was tried in an earlier revision on the theory that X-Plane's native
   nosewheel-steering model was the remaining cause of an abrupt "stop"
@@ -195,9 +192,8 @@ Review and publish the draft release in GitHub after the workflow completes.
   produced the very "stop" symptom it was meant to fix. Leaving this
   override alone lets X-Plane's normal free-castering nosewheel physics run
   (which is how the real Cirrus's nosewheel behaves), while
-  `override_gearbrake` alone remains enabled and is reverted to `0` (giving
-  control back to X-Plane) as soon as the aircraft is switched away from a
-  castering gear aircraft or the plugin is disabled.
+  `override_gearbrake` remains enabled until the plugin is disabled, when it
+  is reverted to `0` to give control back to X-Plane.
 - All log entries are written to `Log.txt` and prefixed with
   `DiffBrakePlugin: ` for easy searching. The plugin logs once when a
   castering aircraft is detected, once on each ground/air transition, once on each

@@ -203,9 +203,10 @@ namespace
         }
         if (gOverrideGearBrakeDataRef == nullptr)
         {
-            // Set to 1 while a supported aircraft is loaded so that
-            // X-Plane's own crude auto-toe-brake helper logic is bypassed entirely, instead
-            // of fighting our additive differential braking on top of it.
+            // Set to 1 for every aircraft while the plugin is enabled. X-Plane's
+            // auto-toe-brake helper can apply abrupt braking at steering extremes;
+            // bypassing it leaves castering differential braking to this plugin and
+            // normal braking to the simulator.
             gOverrideGearBrakeDataRef = XPLMFindDataRef("sim/operation/override/override_gearbrake");
         }
         if (gLeftBrakeRatioDataRef == nullptr)
@@ -304,9 +305,8 @@ namespace
         return false;
     }
 
-    // Enables or disables X-Plane's native auto-toe-brake helper logic.
-    // Called whenever aircraft detection changes so the override tracks
-    // whether a castering aircraft is currently loaded.
+    // Enables or disables X-Plane's native auto-toe-brake helper logic for
+    // every aircraft while the plugin is enabled.
     //
     // NOTE: we deliberately do NOT also set
     // sim/operation/override/override_wheel_steer here. Per X-Plane's own
@@ -318,7 +318,7 @@ namespace
     // free-caster, which caused binding/resistance (and the reported abrupt
     // "stop") exactly when reversing rudder direction. Leaving
     // override_wheel_steer alone lets X-Plane's normal free-castering
-    // nosewheel physics run, which is what the real Cirrus does.
+    // nosewheel physics run.
     void SetSimSteeringOverrides(bool overrideEnabled)
     {
         if (gOverrideGearBrakeDataRef != nullptr)
@@ -361,7 +361,9 @@ namespace
             gHasLoggedAircraftDetected = false;
         }
 
-        SetSimSteeringOverrides(gIsCasteringAircraft);
+        // Bypass X-Plane's auto-toe-brake helper on every aircraft because its
+        // braking at steering extremes causes an abrupt jerk.
+        SetSimSteeringOverrides(true);
 
         if (!gIsCasteringAircraft)
         {
