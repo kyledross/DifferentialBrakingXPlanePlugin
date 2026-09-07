@@ -60,29 +60,8 @@ namespace
     // twist, never triggers any braking at all.
     constexpr float kYawInputDeadzone = 0.05f;
 
-    // Above the deadzone, the response curve uses a 1.5 power rather than a
-    // linear response, so small rudder deflections produce only a gentle brake
-    // nudge, while the full 0-8.5% range is still reachable at full rudder
-    // deflection. This is what actually fixes "the slightest movement
-    // applies way too much brake": a linear mapping means even a tiny
-    // deflection commands a proportionally large fraction of the max brake
-    // force, which is what was causing the sudden jerk/lockup feel.
-    constexpr float kBrakeResponseCurveExponent = 1.5f;
-
-    // Maximum amount the applied brake force is allowed to change per
-    // second when braking is increasing (balance moving away from zero).
-    // This rate-limits how quickly brakes can go from 0 to full,
-    // smoothing out any remaining input noise/spikes and preventing a
-    // sudden wheel lock-up/jerk even if the rudder input itself jumps
-    // abruptly from one frame to the next. With kMaxBrakeForce=0.085, a
-    // value of 0.25 reaches full braking force in about 0.34 seconds.
-    constexpr float kMaxBrakeChangePerSecond = 0.25f;
-
-    // Rate at which the brake balance is allowed to move back toward zero
-    // (i.e. brake pressure is being released). A higher value than
-    // kMaxBrakeChangePerSecond means brake pressure decreases slightly
-    // faster than it ramps up, giving a more natural release feel.
-    constexpr float kMaxBrakeReleasePerSecond = kMaxBrakeChangePerSecond * 1.5f;
+    // Above the deadzone, brake force scales linearly with rudder deflection.
+    constexpr float kBrakeResponseCurveExponent = 1.0f;
 
     // If groundspeed is unavailable for some reason, fall back to gating
     // differential braking on throttle position instead: below this
@@ -130,17 +109,6 @@ namespace
     bool gLastLoggedOnGround = false;
     float gTimeSinceLastDiffBrakeLog = kDiffBrakeLogInterval;
 
-    // Last applied brake balance, used to rate-limit how quickly the
-    // brakes can change from frame to frame. This is a single signed value
-    // (negative == left brake, positive == right brake) rather than two
-    // independent left/right values so that reversing rudder direction
-    // smoothly slides the brake balance through zero, instead of ramping
-    // the old side down and the new side up at the same time. The latter
-    // would apply both brakes simultaneously during the transition, which
-    // adds up to more total stopping force than either side alone and is
-    // what caused the aircraft to abruptly come to a stop before turning
-    // the other way.
-    float gLastAppliedBrakeBalance = 0.0f;
 
     void LogMessage(const std::string& message)
     {
@@ -326,12 +294,10 @@ namespace
             XPLMSetDatai(gOverrideGearBrakeDataRef, overrideEnabled ? 1 : 0);
         }
     }
-    // Removes any additive brake force and resets state that carries between
-    // flight loop callbacks.
+    // Removes any additive brake force.
     void ReleaseDifferentialBraking()
     {
         gIsDifferentialBrakingActive = false;
-        gLastAppliedBrakeBalance = 0.0f;
         gTimeSinceLastDiffBrakeLog = kDiffBrakeLogInterval;
 
         if (gLeftBrakeAddDataRef != nullptr)
@@ -386,8 +352,8 @@ namespace
     }
 
     // Maps a raw one-sided rudder deflection magnitude (0.0 - 1.0) onto a
-    // brake force (0.0 - kMaxBrakeForce), applying the deadzone and the
-    // easing curve described above kYawInputDeadzone/kBrakeResponseCurveExponent.
+    // brake force (0.0 - kMaxBrakeForce), applying the deadzone and linear
+    // response curve described above.
     float MapYawMagnitudeToBrakeForce(float yawMagnitude)
     {
         if (yawMagnitude <= kYawInputDeadzone)
@@ -401,13 +367,6 @@ namespace
         return curved * kMaxBrakeForce;
     }
 
-    // Moves `current` towards `target` by at most `maxDelta`, preventing the
-    // brakes from jumping instantly and causing a jerky lock-up feel.
-    float RateLimit(float current, float target, float maxDelta)
-    {
-        const float delta = std::clamp(target - current, -maxDelta, maxDelta);
-        return current + delta;
-    }
 
     // The main flight loop callback. Runs every frame but does only cheap
     // dataref reads/writes, so it should not cause any stutter.
@@ -491,22 +450,10 @@ namespace
             targetBrakeBalance = MapYawMagnitudeToBrakeForce(yawInput);
         }
 
-        // Rate-limit how quickly the applied brake balance can change, so a
-        // sudden/noisy input spike cannot cause the wheel to lock up
-        // instantly; instead the brake ramps in smoothly. Because this is a
-        // single signed value rather than two independent left/right
-        // values, reversing rudder direction slides smoothly through zero
-        // (briefly releasing both brakes) rather than ramping the old side
-        // down while simultaneously ramping the new side up, which would
-        // apply both brakes at once and cause an abrupt stop mid-turn.
-        // When the balance is moving toward zero (brake pressure releasing),
-        // use the faster release rate so brake pressure decreases slightly
-        // quicker than it ramps up.
-        const bool isReleasing = std::abs(targetBrakeBalance) < std::abs(gLastAppliedBrakeBalance);
-        const float ratePerSecond = isReleasing ? kMaxBrakeReleasePerSecond : kMaxBrakeChangePerSecond;
-        const float maxBrakeDelta = ratePerSecond * inElapsedSinceLastCall;
-        const float brakeBalance = RateLimit(gLastAppliedBrakeBalance, targetBrakeBalance, maxBrakeDelta);
-        gLastAppliedBrakeBalance = brakeBalance;
+        // Apply the signed target immediately. The input is already mapped
+        // linearly, so the active brake pressure directly tracks the
+        // corresponding rudder deflection on every flight-loop frame.
+        const float brakeBalance = targetBrakeBalance;
 
         const float leftBrake = brakeBalance < 0.0f ? -brakeBalance : 0.0f;
         const float rightBrake = brakeBalance > 0.0f ? brakeBalance : 0.0f;

@@ -172,11 +172,11 @@ int main() {
     g_mockFloatDataRefs["sim/flightmodel/position/groundspeed"] = 3.0f; // slow speed on ground
     g_mockFloatDataRefs["sim/joystick/yoke_heading_ratio"] = 1.0f; // full right rudder
 
-    // Run flight loop callback
-    result = g_registeredFlightLoopCallback(1.0f, 1.0f, 2, nullptr);
+    // The full-rudder target must apply immediately, even for a short frame.
+    result = g_registeredFlightLoopCallback(0.02f, 0.02f, 2, nullptr);
     TEST_ASSERT(result == -1.0f);
     TEST_ASSERT(gIsDifferentialBrakingActive);
-    TEST_ASSERT(g_mockFloatDataRefs["sim/flightmodel/controls/r_brake_add"] > 0.0f);
+    TEST_ASSERT(g_mockFloatDataRefs["sim/flightmodel/controls/r_brake_add"] == kMaxBrakeForce);
     TEST_ASSERT(g_mockFloatDataRefs["sim/flightmodel/controls/l_brake_add"] == 0.0f);
     TEST_ASSERT(g_mockFloatDataRefs["sim/flightmodel/controls/rudder_ratio"] == 0.0f);
     // Verify that by default kEnableDiffBrakingLog is false and no "Applying differential braking" is logged
@@ -187,14 +187,23 @@ int main() {
     }
     printf("  [PASS] Castering aircraft differential braking active on taxi (no debug log flood)\n");
 
-    // Test 3: Threshold tolerance <= 0.05 deg
+    // Test 3: Rudder input maps linearly to brake force without a ramp.
+    g_mockFloatDataRefs["sim/joystick/yoke_heading_ratio"] = 0.525f;
+    result = g_registeredFlightLoopCallback(0.02f, 0.02f, 3, nullptr);
+    const float expectedHalfBrake = 0.5f * kMaxBrakeForce;
+    TEST_ASSERT(std::abs(g_mockFloatDataRefs["sim/flightmodel/controls/r_brake_add"] -
+                         expectedHalfBrake) < 0.000001f);
+    TEST_ASSERT(g_mockFloatDataRefs["sim/flightmodel/controls/l_brake_add"] == 0.0f);
+    printf("  [PASS] Rudder input applies immediate linear brake force\n");
+
+    // Test 4: Threshold tolerance <= 0.05 deg
     g_mockFloatDataRefs["sim/aircraft/gear/acf_nw_steerdeg1"] = 0.04f;
     g_mockFloatDataRefs["sim/aircraft/gear/acf_nw_steerdeg2"] = 0.05f;
     XPluginReceiveMessage(0, XPLM_MSG_PLANE_LOADED, reinterpret_cast<void*>(0));
     TEST_ASSERT(gIsCasteringAircraft);
     printf("  [PASS] Deflection within threshold <= 0.05 deg detected as castering\n");
 
-    // Test 4: Exceeding threshold > 0.05 deg
+    // Test 5: Exceeding threshold > 0.05 deg
     g_mockFloatDataRefs["sim/aircraft/gear/acf_nw_steerdeg1"] = 0.06f;
     g_mockFloatDataRefs["sim/aircraft/gear/acf_nw_steerdeg2"] = 0.00f;
     XPluginReceiveMessage(0, XPLM_MSG_PLANE_LOADED, reinterpret_cast<void*>(0));
@@ -204,7 +213,7 @@ int main() {
     TEST_ASSERT(g_mockFloatDataRefs["sim/flightmodel/controls/r_brake_add"] == 0.0f);
     printf("  [PASS] Deflection exceeding threshold > 0.05 deg detected as steerable & cleans up state\n");
 
-    // Test 5: Cirrus SF50 with _gear/0/_gear_castors 1 in .acf file and non-zero steerdeg (10/40)
+    // Test 6: Cirrus SF50 with _gear/0/_gear_castors 1 in .acf file and non-zero steerdeg (10/40)
     {
         const char* sf50AcfPath = "/tmp/test_CirrusSF50.acf";
         std::ofstream sf50File(sf50AcfPath);
@@ -226,7 +235,7 @@ int main() {
         std::remove(sf50AcfPath);
     }
 
-    // Test 6: Cessna 172 with _gear/0/_gear_castors 0 in .acf file and steerdeg (10/10)
+    // Test 7: Cessna 172 with _gear/0/_gear_castors 0 in .acf file and steerdeg (10/10)
     {
         const char* c172AcfPath = "/tmp/test_Cessna172.acf";
         std::ofstream c172File(c172AcfPath);
@@ -248,7 +257,7 @@ int main() {
         std::remove(c172AcfPath);
     }
 
-    // Test 7: Zero rudder on ground with castering aircraft (idle / straight taxi)
+    // Test 8: Zero rudder on ground with castering aircraft (idle / straight taxi)
     // Differential braking is active, but no brake force is applied and no differential braking logs emitted
     {
         g_mockFloatDataRefs["sim/aircraft/gear/acf_nw_steerdeg1"] = 0.0f;
@@ -275,7 +284,7 @@ int main() {
         printf("  [PASS] Zero rudder input on ground produces no brake force and no debug log flood\n");
     }
 
-    // Test 8: Disable plugin releases active braking and restores overrides
+    // Test 9: Disable plugin releases active braking and restores overrides
     g_mockFloatDataRefs["sim/joystick/yoke_heading_ratio"] = 1.0f;
     result = g_registeredFlightLoopCallback(1.0f, 1.0f, 21, nullptr);
     TEST_ASSERT(g_mockFloatDataRefs["sim/flightmodel/controls/r_brake_add"] > 0.0f);
@@ -283,7 +292,6 @@ int main() {
     TEST_ASSERT(g_mockIntDataRefs["sim/operation/override/override_gearbrake"] == 0);
     TEST_ASSERT(g_mockFloatDataRefs["sim/flightmodel/controls/l_brake_add"] == 0.0f);
     TEST_ASSERT(g_mockFloatDataRefs["sim/flightmodel/controls/r_brake_add"] == 0.0f);
-    TEST_ASSERT(gLastAppliedBrakeBalance == 0.0f);
     TEST_ASSERT(!gIsDifferentialBrakingActive);
     TEST_ASSERT(!gIsCasteringAircraft);
     printf("  [PASS] Plugin disable releases braking and restores overrides\n");

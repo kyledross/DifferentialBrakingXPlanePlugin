@@ -148,23 +148,14 @@ Review and publish the draft release in GitHub after the workflow completes.
   datarefs apply additional brake force on top of whatever the pilot's brake
   pedals/axis are already commanding, so the plugin never has to take
   ownership of (i.e. override) the normal brake controls.
-- The rudder-to-brake mapping is deliberately gentle, not linear: inputs
-  within a small deadzone around center apply no brake at all (absorbing
-  joystick centering noise), inputs beyond that ramp in along a power
-  curve (so a slight rudder movement only applies a small brake nudge, not
-  a large fraction of the max force), and the resulting brake force is
-  rate-limited so it can only change by a bounded amount per second. Together
-  these prevent the sudden "wheel locks up" jerk that a naive linear mapping
-  can produce from small/noisy rudder inputs.
-- The left/right brake force is derived from a single rate-limited, signed
-  "brake balance" value (negative = left brake, positive = right brake)
-  rather than two independently rate-limited left/right values. This
-  guarantees the two sides can never both be braking at once: reversing the
-  rudder smoothly slides the balance through zero (briefly releasing both
-  brakes) instead of ramping the old side down while simultaneously ramping
-  the new side up. The latter used to add up to more total stopping force
-  right at the moment of direction change, which is what caused the
-  aircraft to abruptly come to a stop before turning the other way.
+- Rudder-to-brake mapping retains a small center deadzone to absorb joystick
+  centering noise. Beyond it, the selected brake's added force is linear and
+  directly proportional to rudder deflection, updating immediately each
+  flight-loop frame without ramping pressure up or down.
+- The left/right brake force is derived from one signed brake-balance value
+  (negative = left brake, positive = right brake), so only one side receives
+  added braking at a time. Reversing rudder direction immediately releases
+  the old side and applies the proportional force on the new side.
 - While differential braking is active, the plugin also zeroes
   `sim/flightmodel/controls/rudder_ratio` every frame so rudder pedal input
   no longer deflects the aerodynamic rudder surface at the same time it is
@@ -221,14 +212,9 @@ adjusted if needed:
   i.e. 50%).
 - `kYawInputDeadzone` – rudder input magnitude (0.0–1.0) below which no
   brake is applied at all (default 0.05, i.e. 5%).
-- `kBrakeResponseCurveExponent` – exponent of the easing curve applied to
-  rudder input beyond the deadzone before scaling to brake force; higher
-  values make small rudder movements apply proportionally less brake
-  (default 1.5).
-- `kMaxBrakeChangePerSecond` – maximum rate (in brake-force units per
-  second, 0.0–1.0 scale) at which the applied brake force is allowed to
-  change, smoothing out sudden input spikes (default 0.25, i.e. 0 to full
-  in ~0.34 s at the 0.085 max brake force).
+- `kBrakeResponseCurveExponent` – exponent of the response curve applied to
+  rudder input beyond the deadzone before scaling to brake force (default
+  `1.0`, which is linear).
 - `kEnableDiffBrakingLog` – boolean flag to turn on/off continuous differential
   braking debug log messages while braking is applied (default `false`).
 - `kDiffBrakeLogInterval` – minimum interval (in seconds) between differential
