@@ -29,7 +29,7 @@
 
 namespace
 {
-    // Prefix required by design.md for all log entries.
+    // Prefix for all log entries.
     constexpr const char* kLogPrefix = "DiffBrakePlugin: ";
 
     // Maximum steering deflection limit (in degrees) to consider the gear
