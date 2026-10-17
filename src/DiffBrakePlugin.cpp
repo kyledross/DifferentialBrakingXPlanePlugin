@@ -46,6 +46,24 @@ namespace
     constexpr float kMaxGroundspeedForBrakingMs =
         kMaxGroundspeedForBrakingKnots * kKnotsToMetersPerSecond;
 
+    // Progressive braking ramp rates (pressure units per second).
+    constexpr float kProgressiveRampUpRate = 0.75f;
+    constexpr float kProgressiveRampDownRate = 1.5f;
+
+    // Two-stage progressive braking configuration:
+    // Stage 1 caps force to allow smooth taxi deceleration and prevent excessive tire wear.
+    constexpr float kStage1BrakeCap = 0.75f;
+    constexpr float kStage1Duration = 5.0f;
+
+    // Minimum groundspeed (m/s) required for Anti-Skid (ABS) activation.
+    constexpr float kMinAbsGroundspeedMs = 5.0f;
+
+    // Wheel slip ratio threshold below which a wheel is considered skidding.
+    constexpr float kSkidSlipRatio = 0.4f;
+
+    // Duration (in seconds) to release brake pressure when a skid is detected.
+    constexpr float kAbsPulseTime = 0.1f;
+
     // Maximum brake force we are willing to add (0.0 - 1.0 range, same as
     // the underlying brake datarefs). Kept deliberately low: differential
     // braking for ground steering only needs a gentle retarding force on
@@ -94,6 +112,8 @@ namespace
     XPLMDataRef gRightBrakeAddDataRef = nullptr;
     XPLMDataRef gRudderRatioDataRef = nullptr;
     XPLMDataRef gOverrideGearBrakeDataRef = nullptr;
+    XPLMDataRef gTireRotSpeedDataRef = nullptr;
+    XPLMDataRef gGearRadiiDataRef = nullptr;
     // Read-only; used purely for debug logging so we can tell whether
     // X-Plane's native auto-toe-brake logic is still contributing braking
     // on top of what we command via the "add" datarefs.
@@ -108,6 +128,18 @@ namespace
     bool gHasLoggedGroundState = false; // whether the last ground/air state was logged
     bool gLastLoggedOnGround = false;
     float gTimeSinceLastDiffBrakeLog = kDiffBrakeLogInterval;
+
+    // Progressive brake command target, hold duration, and filtered pressure state.
+    float gTargetProgressiveBrake = 0.0f;
+    float gBrakeHoldDuration = 0.0f;
+    float gCurrentProgressiveBrake = 0.0f;
+
+    // ABS pulse timers for left and right wheels.
+    float gAbsReleaseTimerLeft = 0.0f;
+    float gAbsReleaseTimerRight = 0.0f;
+
+    // Custom command handle for progressive braking with ABS.
+    XPLMCommandRef gProgressiveBrakeCmd = nullptr;
 
 
     void LogMessage(const std::string& message)
@@ -184,6 +216,26 @@ namespace
         if (gRightBrakeRatioDataRef == nullptr)
         {
             gRightBrakeRatioDataRef = XPLMFindDataRef("sim/cockpit2/controls/right_brake_ratio");
+        }
+        if (gTireRotSpeedDataRef == nullptr)
+        {
+            gTireRotSpeedDataRef = XPLMFindDataRef("sim/flightmodel2/gear/tire_rotation_speed_rad_sec");
+            if (gTireRotSpeedDataRef == nullptr)
+            {
+                gTireRotSpeedDataRef = XPLMFindDataRef("sim/flightmodel/parts/tire_rot_speed_rad_sec");
+            }
+        }
+        if (gGearRadiiDataRef == nullptr)
+        {
+            gGearRadiiDataRef = XPLMFindDataRef("sim/flightmodel2/gear/tire_radius_mtrs");
+            if (gGearRadiiDataRef == nullptr)
+            {
+                gGearRadiiDataRef = XPLMFindDataRef("sim/aircraft/parts/acf_gear_tirrad");
+            }
+            if (gGearRadiiDataRef == nullptr)
+            {
+                gGearRadiiDataRef = XPLMFindDataRef("sim/aircraft/parts/acf_gear_radi");
+            }
         }
     }
 
@@ -299,6 +351,11 @@ namespace
     {
         gIsDifferentialBrakingActive = false;
         gTimeSinceLastDiffBrakeLog = kDiffBrakeLogInterval;
+        gTargetProgressiveBrake = 0.0f;
+        gBrakeHoldDuration = 0.0f;
+        gCurrentProgressiveBrake = 0.0f;
+        gAbsReleaseTimerLeft = 0.0f;
+        gAbsReleaseTimerRight = 0.0f;
 
         if (gLeftBrakeAddDataRef != nullptr)
         {
@@ -368,6 +425,23 @@ namespace
     }
 
 
+    // Custom command handler for progressive braking with ABS.
+    int ProgressiveBrakeCmdHandler(XPLMCommandRef /*inCommand*/,
+                                   XPLMCommandPhase inPhase,
+                                   void* /*inRefcon*/)
+    {
+        if (inPhase == xplm_CommandBegin || inPhase == xplm_CommandContinue)
+        {
+            gTargetProgressiveBrake = 1.0f;
+        }
+        else if (inPhase == xplm_CommandEnd)
+        {
+            gTargetProgressiveBrake = 0.0f;
+            gBrakeHoldDuration = 0.0f;
+        }
+        return 0;
+    }
+
     // The main flight loop callback. Runs every frame but does only cheap
     // dataref reads/writes, so it should not cause any stutter.
     float FlightLoopCallback(float inElapsedSinceLastCall,
@@ -375,20 +449,24 @@ namespace
                               int /*inCounter*/,
                               void* /*inRefcon*/)
     {
-        if (!gIsCasteringAircraft)
-        {
-            return kFlightLoopInterval;
-        }
+        FindDataRefsIfNeeded();
 
         const bool onGround = IsOnGround();
 
         // Prefer gating on groundspeed. If that dataref is unavailable for
         // some reason, fall back to gating on throttle position instead, so
         // we still avoid engaging differential braking during takeoff/flight.
-        bool slowEnoughForBraking;
+        float groundSpeedMs = 0.0f;
+        bool hasGroundSpeed = false;
         if (gGroundSpeedDataRef != nullptr)
         {
-            const float groundSpeedMs = XPLMGetDataf(gGroundSpeedDataRef);
+            groundSpeedMs = XPLMGetDataf(gGroundSpeedDataRef);
+            hasGroundSpeed = true;
+        }
+
+        bool slowEnoughForBraking;
+        if (hasGroundSpeed)
+        {
             slowEnoughForBraking = groundSpeedMs <= kMaxGroundspeedForBrakingMs;
         }
         else if (gThrottleDataRef != nullptr)
@@ -423,56 +501,159 @@ namespace
                            : "Differential braking is now INACTIVE.");
         }
 
-        if (!gIsDifferentialBrakingActive)
+        // Step A: Update Progressive Brake Base Pressure
+        if (gTargetProgressiveBrake > 0.0f)
         {
-            // Make sure we are not leaving any stale added braking force
-            // applied once we stop managing the brakes.
-            ReleaseDifferentialBraking();
-            return kFlightLoopInterval;
+            gBrakeHoldDuration += inElapsedSinceLastCall;
+        }
+        else
+        {
+            gBrakeHoldDuration = 0.0f;
         }
 
-        const float yawInput = gYawInputDataRef != nullptr
-                                    ? XPLMGetDataf(gYawInputDataRef)
-                                    : 0.0f;
-
-        // yawInput is in the range [-1, 1]. Negative == left twist/pedal,
-        // positive == right. Map the magnitude through the deadzone/curve
-        // above onto a single signed brake balance (negative == left brake,
-        // positive == right brake) so the two sides can never both be
-        // non-zero at the same time.
-        float targetBrakeBalance = 0.0f;
-        if (yawInput < 0.0f)
+        float effectiveTarget = gTargetProgressiveBrake;
+        if (effectiveTarget > 0.0f && gBrakeHoldDuration < kStage1Duration)
         {
-            targetBrakeBalance = -MapYawMagnitudeToBrakeForce(-yawInput);
-        }
-        else if (yawInput > 0.0f)
-        {
-            targetBrakeBalance = MapYawMagnitudeToBrakeForce(yawInput);
+            effectiveTarget = std::min(effectiveTarget, kStage1BrakeCap);
         }
 
-        // Apply the signed target immediately. The input is already mapped
-        // linearly, so the active brake pressure directly tracks the
-        // corresponding rudder deflection on every flight-loop frame.
-        const float brakeBalance = targetBrakeBalance;
+        if (gCurrentProgressiveBrake < effectiveTarget)
+        {
+            gCurrentProgressiveBrake += kProgressiveRampUpRate * inElapsedSinceLastCall;
+            if (gCurrentProgressiveBrake > effectiveTarget)
+            {
+                gCurrentProgressiveBrake = effectiveTarget;
+            }
+            if (gCurrentProgressiveBrake > 1.0f)
+            {
+                gCurrentProgressiveBrake = 1.0f;
+            }
+        }
+        else if (gCurrentProgressiveBrake > effectiveTarget)
+        {
+            gCurrentProgressiveBrake -= kProgressiveRampDownRate * inElapsedSinceLastCall;
+            if (gCurrentProgressiveBrake < effectiveTarget)
+            {
+                gCurrentProgressiveBrake = effectiveTarget;
+            }
+            if (gCurrentProgressiveBrake < 0.0f)
+            {
+                gCurrentProgressiveBrake = 0.0f;
+            }
+        }
 
-        const float leftBrake = brakeBalance < 0.0f ? -brakeBalance : 0.0f;
-        const float rightBrake = brakeBalance > 0.0f ? brakeBalance : 0.0f;
+        // Step B: Calculate Existing Differential Braking
+        float diffBrakeLeft = 0.0f;
+        float diffBrakeRight = 0.0f;
+        if (gIsCasteringAircraft && gIsDifferentialBrakingActive)
+        {
+            const float yawInput = gYawInputDataRef != nullptr
+                                        ? XPLMGetDataf(gYawInputDataRef)
+                                        : 0.0f;
 
+            // yawInput is in the range [-1, 1]. Negative == left twist/pedal,
+            // positive == right. Map the magnitude through the deadzone/curve
+            // above onto a single signed brake balance (negative == left brake,
+            // positive == right brake) so the two sides can never both be
+            // non-zero at the same time.
+            float targetBrakeBalance = 0.0f;
+            if (yawInput < 0.0f)
+            {
+                targetBrakeBalance = -MapYawMagnitudeToBrakeForce(-yawInput);
+            }
+            else if (yawInput > 0.0f)
+            {
+                targetBrakeBalance = MapYawMagnitudeToBrakeForce(yawInput);
+            }
+
+            diffBrakeLeft = targetBrakeBalance < 0.0f ? -targetBrakeBalance : 0.0f;
+            diffBrakeRight = targetBrakeBalance > 0.0f ? targetBrakeBalance : 0.0f;
+
+            // Suppress aerodynamic rudder surface while differential braking
+            // is active so rudder pedal input only steers via differential braking.
+            if (gRudderRatioDataRef != nullptr)
+            {
+                XPLMSetDataf(gRudderRatioDataRef, 0.0f);
+            }
+        }
+
+        // Step C: Merge Forces
+        float combinedLeft = std::min(1.0f, diffBrakeLeft + gCurrentProgressiveBrake);
+        float combinedRight = std::min(1.0f, diffBrakeRight + gCurrentProgressiveBrake);
+
+        // Step D: Universal ABS Logic
+        const float groundspeed = hasGroundSpeed
+                                      ? groundSpeedMs
+                                      : (gGroundSpeedDataRef != nullptr ? XPLMGetDataf(gGroundSpeedDataRef) : 0.0f);
+
+        if (groundspeed > kMinAbsGroundspeedMs && (combinedLeft > 0.0f || combinedRight > 0.0f) &&
+            gTireRotSpeedDataRef != nullptr && gGearRadiiDataRef != nullptr)
+        {
+            float tireRotSpeed[8] = {0.0f};
+            float gearRadii[8] = {0.0f};
+            XPLMGetDatavf(gTireRotSpeedDataRef, tireRotSpeed, 0, 8);
+            XPLMGetDatavf(gGearRadiiDataRef, gearRadii, 0, 8);
+
+            const float wheel_radius_l = gearRadii[1];
+            const float wheel_radius_r = gearRadii[2];
+
+            if (wheel_radius_l > 0.0f && wheel_radius_r > 0.0f)
+            {
+                const float wheel_speed_l = wheel_radius_l * tireRotSpeed[1];
+                const float wheel_speed_r = wheel_radius_r * tireRotSpeed[2];
+
+                // Left Wheel
+                if (gAbsReleaseTimerLeft > 0.0f)
+                {
+                    gAbsReleaseTimerLeft -= inElapsedSinceLastCall;
+                    if (gAbsReleaseTimerLeft <= 1e-5f)
+                    {
+                        gAbsReleaseTimerLeft = 0.0f;
+                    }
+                    combinedLeft = 0.0f;
+                }
+                else if (wheel_speed_l < (groundspeed * kSkidSlipRatio))
+                {
+                    gAbsReleaseTimerLeft = kAbsPulseTime;
+                    combinedLeft = 0.0f;
+                }
+
+                // Right Wheel
+                if (gAbsReleaseTimerRight > 0.0f)
+                {
+                    gAbsReleaseTimerRight -= inElapsedSinceLastCall;
+                    if (gAbsReleaseTimerRight <= 1e-5f)
+                    {
+                        gAbsReleaseTimerRight = 0.0f;
+                    }
+                    combinedRight = 0.0f;
+                }
+                else if (wheel_speed_r < (groundspeed * kSkidSlipRatio))
+                {
+                    gAbsReleaseTimerRight = kAbsPulseTime;
+                    combinedRight = 0.0f;
+                }
+            }
+            else
+            {
+                gAbsReleaseTimerLeft = 0.0f;
+                gAbsReleaseTimerRight = 0.0f;
+            }
+        }
+        else
+        {
+            gAbsReleaseTimerLeft = 0.0f;
+            gAbsReleaseTimerRight = 0.0f;
+        }
+
+        // Step E: Apply to Datarefs
         if (gLeftBrakeAddDataRef != nullptr)
         {
-            XPLMSetDataf(gLeftBrakeAddDataRef, leftBrake);
+            XPLMSetDataf(gLeftBrakeAddDataRef, combinedLeft);
         }
         if (gRightBrakeAddDataRef != nullptr)
         {
-            XPLMSetDataf(gRightBrakeAddDataRef, rightBrake);
-        }
-
-        // Suppress the aerodynamic rudder surface while differential braking
-        // is active so that rudder pedal input only steers the aircraft via
-        // the brakes, not also via the rudder, preventing dual-steering.
-        if (gRudderRatioDataRef != nullptr)
-        {
-            XPLMSetDataf(gRudderRatioDataRef, 0.0f);
+            XPLMSetDataf(gRightBrakeAddDataRef, combinedRight);
         }
 
         // Debug-level trace of the forces applied, useful for tuning, and
@@ -480,15 +661,16 @@ namespace
         // on each wheel. If those values are noticeably higher than what we
         // requested above, that is evidence the sim's native auto-toe-brake
         // logic is still contributing braking on top of ours.
-        // Only log when differential braking is actually being applied and
+        // Only log when braking is actually being applied and
         // throttled to once per quarter second (when debug logging is enabled).
         // ReSharper disable once CppIfCanBeReplacedByConstexprIf
-        if (kEnableDiffBrakingLog && (leftBrake > 0.0f || rightBrake > 0.0f))
+        if (kEnableDiffBrakingLog && (combinedLeft > 0.0f || combinedRight > 0.0f))
         {
             gTimeSinceLastDiffBrakeLog += inElapsedSinceLastCall;
             if (gTimeSinceLastDiffBrakeLog >= kDiffBrakeLogInterval)
             {
                 gTimeSinceLastDiffBrakeLog = 0.0f;
+                const float yawInput = gYawInputDataRef != nullptr ? XPLMGetDataf(gYawInputDataRef) : 0.0f;
                 const float actualLeftBrakeRatio =
                     gLeftBrakeRatioDataRef != nullptr ? XPLMGetDataf(gLeftBrakeRatioDataRef) : -1.0f;
                 const float actualRightBrakeRatio =
@@ -497,7 +679,7 @@ namespace
                 std::snprintf(buffer, sizeof(buffer),
                               "Applying differential braking: rudder=%.2f left_brake_add=%.2f right_brake_add=%.2f "
                               "actual_left_brake=%.2f actual_right_brake=%.2f",
-                              yawInput, leftBrake, rightBrake, actualLeftBrakeRatio, actualRightBrakeRatio);
+                              yawInput, combinedLeft, combinedRight, actualLeftBrakeRatio, actualRightBrakeRatio);
                 LogMessage(buffer);
             }
         }
@@ -517,6 +699,13 @@ PLUGIN_API int XPluginStart(char* outName, char* outSig, char* outDesc)
     std::strcpy(outSig, "com.kyleross.diffbrakeplugin");
     std::strcpy(outDesc, "Provides smooth differential braking via rudder control.");
 
+    gProgressiveBrakeCmd = XPLMCreateCommand("diffbrakeplugin/braking/hold_brakes_progressive_abs",
+                                             "Hold Brakes (Progressive with ABS)");
+    if (gProgressiveBrakeCmd != nullptr)
+    {
+        XPLMRegisterCommandHandler(gProgressiveBrakeCmd, ProgressiveBrakeCmdHandler, 1, nullptr);
+    }
+
     XPLMRegisterFlightLoopCallback(FlightLoopCallback, kFlightLoopInterval, nullptr);
 
     return 1;
@@ -524,6 +713,12 @@ PLUGIN_API int XPluginStart(char* outName, char* outSig, char* outDesc)
 
 PLUGIN_API void XPluginStop()
 {
+    if (gProgressiveBrakeCmd != nullptr)
+    {
+        XPLMUnregisterCommandHandler(gProgressiveBrakeCmd, ProgressiveBrakeCmdHandler, 1, nullptr);
+        gProgressiveBrakeCmd = nullptr;
+    }
+
     SetSimSteeringOverrides(false);
     ReleaseDifferentialBraking();
     XPLMUnregisterFlightLoopCallback(FlightLoopCallback, nullptr);

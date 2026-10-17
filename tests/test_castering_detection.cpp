@@ -18,6 +18,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -38,15 +39,33 @@
 // Mock state
 static std::map<std::string, float> g_mockFloatDataRefs;
 static std::map<std::string, int> g_mockIntDataRefs;
+static std::map<std::string, std::vector<float>> g_mockFloatArrayDataRefs;
+static std::set<std::string> g_registeredDataRefs;
 static std::vector<std::string> g_mockDebugLogs;
 static std::map<XPLMDataRef, std::string> g_datarefToName;
 static std::map<std::string, XPLMDataRef> g_nameToDataref;
 static XPLMFlightLoop_f g_registeredFlightLoopCallback = nullptr;
 static float g_registeredFlightLoopInterval = 0.0f;
 
+struct MockCommand {
+    std::string name;
+    std::string description;
+    XPLMCommandCallback_f handler = nullptr;
+    int before = 0;
+    void* refcon = nullptr;
+};
+static std::map<std::string, MockCommand> g_mockCommands;
+static std::map<XPLMCommandRef, std::string> g_commandRefToName;
+
 extern "C" {
 
 XPLMDataRef XPLMFindDataRef(const char* inDataRefName) {
+    if (g_mockFloatDataRefs.find(inDataRefName) == g_mockFloatDataRefs.end() &&
+        g_mockIntDataRefs.find(inDataRefName) == g_mockIntDataRefs.end() &&
+        g_mockFloatArrayDataRefs.find(inDataRefName) == g_mockFloatArrayDataRefs.end() &&
+        g_registeredDataRefs.find(inDataRefName) == g_registeredDataRefs.end()) {
+        return nullptr;
+    }
     if (g_nameToDataref.find(inDataRefName) == g_nameToDataref.end()) {
         intptr_t newId = static_cast<intptr_t>(g_nameToDataref.size() + 1);
         XPLMDataRef handle = reinterpret_cast<XPLMDataRef>(newId);
@@ -86,6 +105,67 @@ void XPLMSetDatai(XPLMDataRef inDataRef, int inValue) {
     }
 }
 
+int XPLMGetDatavf(XPLMDataRef inDataRef, float* outValues, int inOffset, int inMax) {
+    auto it = g_datarefToName.find(inDataRef);
+    if (it != g_datarefToName.end()) {
+        const auto& vec = g_mockFloatArrayDataRefs[it->second];
+        if (outValues == nullptr) {
+            return static_cast<int>(vec.size());
+        }
+        int count = 0;
+        for (int i = 0; i < inMax && (inOffset + i) < static_cast<int>(vec.size()); ++i) {
+            outValues[i] = vec[inOffset + i];
+            ++count;
+        }
+        return count;
+    }
+    return 0;
+}
+
+void XPLMSetDatavf(XPLMDataRef inDataRef, float* inValues, int inOffset, int inCount) {
+    auto it = g_datarefToName.find(inDataRef);
+    if (it != g_datarefToName.end()) {
+        auto& vec = g_mockFloatArrayDataRefs[it->second];
+        if (static_cast<int>(vec.size()) < inOffset + inCount) {
+            vec.resize(inOffset + inCount, 0.0f);
+        }
+        for (int i = 0; i < inCount; ++i) {
+            vec[inOffset + i] = inValues[i];
+        }
+    }
+}
+
+XPLMCommandRef XPLMCreateCommand(const char* inName, const char* inDescription) {
+    if (g_mockCommands.find(inName) == g_mockCommands.end()) {
+        MockCommand cmd;
+        cmd.name = inName;
+        cmd.description = inDescription ? inDescription : "";
+        g_mockCommands[inName] = cmd;
+    }
+    intptr_t id = static_cast<intptr_t>(std::hash<std::string>{}(inName));
+    XPLMCommandRef handle = reinterpret_cast<XPLMCommandRef>(id);
+    g_commandRefToName[handle] = inName;
+    return handle;
+}
+
+void XPLMRegisterCommandHandler(XPLMCommandRef inCommand, XPLMCommandCallback_f inHandler, int inBefore, void* inRefcon) {
+    auto it = g_commandRefToName.find(inCommand);
+    if (it != g_commandRefToName.end()) {
+        g_mockCommands[it->second].handler = inHandler;
+        g_mockCommands[it->second].before = inBefore;
+        g_mockCommands[it->second].refcon = inRefcon;
+    }
+}
+
+void XPLMUnregisterCommandHandler(XPLMCommandRef inCommand, XPLMCommandCallback_f inHandler, int /*inBefore*/, void* /*inRefcon*/) {
+    auto it = g_commandRefToName.find(inCommand);
+    if (it != g_commandRefToName.end()) {
+        if (g_mockCommands[it->second].handler == inHandler) {
+            g_mockCommands[it->second].handler = nullptr;
+        }
+    }
+}
+
 void XPLMDebugString(const char* inString) {
     g_mockDebugLogs.push_back(inString);
 }
@@ -117,11 +197,32 @@ void XPLMGetNthAircraftModel(int inIndex, char* outFileName, char* outPath) {
 void ResetMockValues() {
     g_mockFloatDataRefs.clear();
     g_mockIntDataRefs.clear();
+    g_mockFloatArrayDataRefs.clear();
     g_mockDebugLogs.clear();
+    gTireRotSpeedDataRef = nullptr;
+    gGearRadiiDataRef = nullptr;
+    gAbsReleaseTimerLeft = 0.0f;
+    gAbsReleaseTimerRight = 0.0f;
+    gTargetProgressiveBrake = 0.0f;
+    gBrakeHoldDuration = 0.0f;
+    gCurrentProgressiveBrake = 0.0f;
 }
 
 int main() {
     printf("Starting Castering Detection Plugin Tests...\n");
+
+    g_registeredDataRefs.insert("sim/flightmodel/controls/l_brake_add");
+    g_registeredDataRefs.insert("sim/flightmodel/controls/r_brake_add");
+    g_registeredDataRefs.insert("sim/cockpit2/controls/left_brake_ratio");
+    g_registeredDataRefs.insert("sim/cockpit2/controls/right_brake_ratio");
+    g_registeredDataRefs.insert("sim/operation/override/override_gearbrake");
+    g_registeredDataRefs.insert("sim/flightmodel/controls/rudder_ratio");
+    g_registeredDataRefs.insert("sim/flightmodel/failures/onground_any");
+    g_registeredDataRefs.insert("sim/flightmodel/position/groundspeed");
+    g_registeredDataRefs.insert("sim/flightmodel/engine/ENGN_thro");
+    g_registeredDataRefs.insert("sim/joystick/yoke_heading_ratio");
+    g_registeredDataRefs.insert("sim/aircraft/gear/acf_nw_steerdeg1");
+    g_registeredDataRefs.insert("sim/aircraft/gear/acf_nw_steerdeg2");
 
     char name[256], sig[256], desc[256];
     int startResult = XPluginStart(name, sig, desc);
@@ -296,9 +397,245 @@ int main() {
     TEST_ASSERT(!gIsCasteringAircraft);
     printf("  [PASS] Plugin disable releases braking and restores overrides\n");
 
+    // Test 10: Progressive Brake Command Handler
+    {
+        TEST_ASSERT(gProgressiveBrakeCmd != nullptr);
+        TEST_ASSERT(g_mockCommands.find("diffbrakeplugin/braking/hold_brakes_progressive_abs") != g_mockCommands.end());
+        auto& cmdInfo = g_mockCommands["diffbrakeplugin/braking/hold_brakes_progressive_abs"];
+        TEST_ASSERT(cmdInfo.description == "Hold Brakes (Progressive with ABS)");
+        TEST_ASSERT(cmdInfo.handler != nullptr);
+
+        // Begin command -> target becomes 1.0f
+        int ret = cmdInfo.handler(gProgressiveBrakeCmd, xplm_CommandBegin, cmdInfo.refcon);
+        TEST_ASSERT(ret == 0);
+        TEST_ASSERT(gTargetProgressiveBrake == 1.0f);
+
+        // Continue command -> target remains 1.0f
+        ret = cmdInfo.handler(gProgressiveBrakeCmd, xplm_CommandContinue, cmdInfo.refcon);
+        TEST_ASSERT(ret == 0);
+        TEST_ASSERT(gTargetProgressiveBrake == 1.0f);
+
+        // End command -> target becomes 0.0f
+        ret = cmdInfo.handler(gProgressiveBrakeCmd, xplm_CommandEnd, cmdInfo.refcon);
+        TEST_ASSERT(ret == 0);
+        TEST_ASSERT(gTargetProgressiveBrake == 0.0f);
+        printf("  [PASS] Progressive brake custom command handler\n");
+    }
+
+    // Test 11: Two-Stage Progressive Brake Ramp Up, Plateau, Escalation, and Ramp Down
+    {
+        // Start plugin again
+        XPluginEnable();
+        ResetMockValues();
+        g_mockIntDataRefs["sim/flightmodel/failures/onground_any"] = 1;
+        g_mockFloatDataRefs["sim/flightmodel/position/groundspeed"] = 3.0f;
+        g_mockFloatDataRefs["sim/joystick/yoke_heading_ratio"] = 0.0f; // no diff braking
+
+        // Press command
+        auto& cmdInfo = g_mockCommands["diffbrakeplugin/braking/hold_brakes_progressive_abs"];
+        cmdInfo.handler(gProgressiveBrakeCmd, xplm_CommandBegin, cmdInfo.refcon);
+        TEST_ASSERT(gTargetProgressiveBrake == 1.0f);
+        gCurrentProgressiveBrake = 0.0f;
+        gBrakeHoldDuration = 0.0f;
+
+        // Stage 1 initial ramp: 0.5s * 0.75 = 0.375
+        g_registeredFlightLoopCallback(0.5f, 0.5f, 30, nullptr);
+        TEST_ASSERT(std::abs(gCurrentProgressiveBrake - 0.375f) < 0.0001f);
+        TEST_ASSERT(std::abs(g_mockFloatDataRefs["sim/flightmodel/controls/l_brake_add"] - 0.375f) < 0.0001f);
+        TEST_ASSERT(std::abs(g_mockFloatDataRefs["sim/flightmodel/controls/r_brake_add"] - 0.375f) < 0.0001f);
+
+        // Stage 1 cap: another 0.5s (1.0s total): reached 0.75f cap
+        g_registeredFlightLoopCallback(0.5f, 0.5f, 31, nullptr);
+        TEST_ASSERT(std::abs(gCurrentProgressiveBrake - 0.75f) < 0.0001f);
+        TEST_ASSERT(std::abs(g_mockFloatDataRefs["sim/flightmodel/controls/l_brake_add"] - 0.75f) < 0.0001f);
+
+        // Stage 1 plateau: hold for another 3.0s (4.0s total): remains capped at 0.75f
+        g_registeredFlightLoopCallback(3.0f, 3.0f, 32, nullptr);
+        TEST_ASSERT(std::abs(gCurrentProgressiveBrake - 0.75f) < 0.0001f);
+        TEST_ASSERT(std::abs(g_mockFloatDataRefs["sim/flightmodel/controls/l_brake_add"] - 0.75f) < 0.0001f);
+
+        // Stage 2 transition: hold for another 1.5s (5.5s total -> escalates past 5.0s to 1.0f)
+        g_registeredFlightLoopCallback(1.5f, 1.5f, 33, nullptr);
+        TEST_ASSERT(std::abs(gCurrentProgressiveBrake - 1.0f) < 0.0001f);
+        TEST_ASSERT(std::abs(g_mockFloatDataRefs["sim/flightmodel/controls/l_brake_add"] - 1.0f) < 0.0001f);
+
+        // Release command: ramp down for 0.2s: 1.0 - (0.2 * 1.5) = 0.70f
+        cmdInfo.handler(gProgressiveBrakeCmd, xplm_CommandEnd, cmdInfo.refcon);
+        TEST_ASSERT(gTargetProgressiveBrake == 0.0f);
+        TEST_ASSERT(gBrakeHoldDuration == 0.0f);
+        g_registeredFlightLoopCallback(0.2f, 0.2f, 34, nullptr);
+        TEST_ASSERT(std::abs(gCurrentProgressiveBrake - 0.70f) < 0.0001f);
+        TEST_ASSERT(std::abs(g_mockFloatDataRefs["sim/flightmodel/controls/l_brake_add"] - 0.70f) < 0.0001f);
+
+        // Ramp down for another 0.6s: 0.70 - (0.6 * 1.5) = -0.20 -> clamped to 0.0f
+        g_registeredFlightLoopCallback(0.6f, 0.6f, 35, nullptr);
+        TEST_ASSERT(std::abs(gCurrentProgressiveBrake - 0.0f) < 0.0001f);
+        TEST_ASSERT(g_mockFloatDataRefs["sim/flightmodel/controls/l_brake_add"] == 0.0f);
+        TEST_ASSERT(g_mockFloatDataRefs["sim/flightmodel/controls/r_brake_add"] == 0.0f);
+
+        // Re-trigger command after release: must reset duration and cap at Stage 1 (0.75f) again
+        cmdInfo.handler(gProgressiveBrakeCmd, xplm_CommandBegin, cmdInfo.refcon);
+        TEST_ASSERT(gTargetProgressiveBrake == 1.0f);
+        TEST_ASSERT(gBrakeHoldDuration == 0.0f);
+        // Ramp up for 2.0s: reaches 0.75f and remains capped at 0.75f
+        g_registeredFlightLoopCallback(2.0f, 2.0f, 36, nullptr);
+        TEST_ASSERT(std::abs(gCurrentProgressiveBrake - 0.75f) < 0.0001f);
+        TEST_ASSERT(std::abs(g_mockFloatDataRefs["sim/flightmodel/controls/l_brake_add"] - 0.75f) < 0.0001f);
+
+        cmdInfo.handler(gProgressiveBrakeCmd, xplm_CommandEnd, cmdInfo.refcon);
+        g_registeredFlightLoopCallback(1.0f, 1.0f, 37, nullptr);
+        TEST_ASSERT(std::abs(gCurrentProgressiveBrake - 0.0f) < 0.0001f);
+        printf("  [PASS] Two-stage progressive brake ramp up, plateau, escalation, and ramp down\n");
+    }
+
+    // Test 12: Progressive Braking on Steerable Aircraft & Merge with Diff Braking
+    {
+        // Load castering aircraft
+        g_mockFloatDataRefs["sim/aircraft/gear/acf_nw_steerdeg1"] = 0.0f;
+        g_mockFloatDataRefs["sim/aircraft/gear/acf_nw_steerdeg2"] = 0.0f;
+        XPluginReceiveMessage(0, XPLM_MSG_PLANE_LOADED, reinterpret_cast<void*>(0));
+        TEST_ASSERT(gIsCasteringAircraft);
+
+        g_mockIntDataRefs["sim/flightmodel/failures/onground_any"] = 1;
+        g_mockFloatDataRefs["sim/flightmodel/position/groundspeed"] = 3.0f;
+        g_mockFloatDataRefs["sim/joystick/yoke_heading_ratio"] = 1.0f; // max right rudder -> diff right = 0.085f
+
+        gCurrentProgressiveBrake = 0.5f;
+        gTargetProgressiveBrake = 0.5f;
+
+        g_registeredFlightLoopCallback(0.01f, 0.01f, 40, nullptr);
+        // combinedLeft = 0.0f + 0.5f = 0.5f
+        // combinedRight = 0.085f + 0.5f = 0.585f
+        TEST_ASSERT(std::abs(g_mockFloatDataRefs["sim/flightmodel/controls/l_brake_add"] - 0.5f) < 0.0001f);
+        TEST_ASSERT(std::abs(g_mockFloatDataRefs["sim/flightmodel/controls/r_brake_add"] - (0.085f + 0.5f)) < 0.0001f);
+
+        // Saturation clamping to 1.0f
+        gBrakeHoldDuration = 6.0f;
+        gCurrentProgressiveBrake = 0.95f;
+        gTargetProgressiveBrake = 0.95f;
+        g_registeredFlightLoopCallback(0.01f, 0.01f, 41, nullptr);
+        // combinedRight = std::min(1.0f, 0.085f + 0.95f) = 1.0f
+        TEST_ASSERT(std::abs(g_mockFloatDataRefs["sim/flightmodel/controls/r_brake_add"] - 1.0f) < 0.0001f);
+
+        // Steerable aircraft: diff brake is 0, progressive applies directly
+        g_mockFloatDataRefs["sim/aircraft/gear/acf_nw_steerdeg1"] = 10.0f;
+        g_mockFloatDataRefs["sim/aircraft/gear/acf_nw_steerdeg2"] = 10.0f;
+        g_mockFloatDataRefs["sim/flightmodel/controls/rudder_ratio"] = 0.8f;
+        XPluginReceiveMessage(0, XPLM_MSG_PLANE_LOADED, reinterpret_cast<void*>(0));
+        TEST_ASSERT(!gIsCasteringAircraft);
+
+        gCurrentProgressiveBrake = 0.4f;
+        gTargetProgressiveBrake = 0.4f;
+        g_registeredFlightLoopCallback(0.01f, 0.01f, 42, nullptr);
+        TEST_ASSERT(std::abs(g_mockFloatDataRefs["sim/flightmodel/controls/l_brake_add"] - 0.4f) < 0.0001f);
+        TEST_ASSERT(std::abs(g_mockFloatDataRefs["sim/flightmodel/controls/r_brake_add"] - 0.4f) < 0.0001f);
+        TEST_ASSERT(g_mockFloatDataRefs["sim/flightmodel/controls/rudder_ratio"] == 0.8f); // rudder preserved
+        printf("  [PASS] Merged diff braking and progressive braking on castering & steerable aircraft\n");
+    }
+
+    // Test 13: Universal Anti-Skid (ABS) Logic
+    {
+        ResetMockValues();
+        g_mockIntDataRefs["sim/flightmodel/failures/onground_any"] = 1;
+        gBrakeHoldDuration = 6.0f;
+        gCurrentProgressiveBrake = 0.8f;
+        gTargetProgressiveBrake = 0.8f;
+
+        // Gear radii (index 1: left = 0.3m, index 2: right = 0.3m)
+        std::vector<float> radii = {0.0f, 0.3f, 0.3f, 0.0f};
+        g_mockFloatArrayDataRefs["sim/aircraft/parts/acf_gear_radi"] = radii;
+
+        // Scenario A: Groundspeed <= kMinAbsGroundspeedMs (e.g. 4.0 m/s <= 5.0 m/s) -> ABS disabled
+        g_mockFloatDataRefs["sim/flightmodel/position/groundspeed"] = 4.0f;
+        // Even if wheels are locked (rot speed = 0)
+        std::vector<float> lockedTires = {0.0f, 0.0f, 0.0f, 0.0f};
+        g_mockFloatArrayDataRefs["sim/flightmodel/parts/tire_rot_speed_rad_sec"] = lockedTires;
+
+        g_registeredFlightLoopCallback(0.02f, 0.02f, 50, nullptr);
+        TEST_ASSERT(std::abs(g_mockFloatDataRefs["sim/flightmodel/controls/l_brake_add"] - 0.8f) < 0.0001f);
+        TEST_ASSERT(std::abs(g_mockFloatDataRefs["sim/flightmodel/controls/r_brake_add"] - 0.8f) < 0.0001f);
+        TEST_ASSERT(gAbsReleaseTimerLeft == 0.0f);
+        TEST_ASSERT(gAbsReleaseTimerRight == 0.0f);
+
+        // Scenario B: Groundspeed > 5.0 m/s (e.g. 10.0 m/s). Left wheel skidding, right wheel rolling freely.
+        g_mockFloatDataRefs["sim/flightmodel/position/groundspeed"] = 10.0f;
+        // Left wheel locked (0.0 rad/s -> wheel_speed_l = 0.0 < 4.0 m/s)
+        // Right wheel rolling (33.333 rad/s -> wheel_speed_r = 10.0 >= 4.0 m/s)
+        std::vector<float> tiresOneSkid = {0.0f, 0.0f, 33.3333f, 0.0f};
+        g_mockFloatArrayDataRefs["sim/flightmodel/parts/tire_rot_speed_rad_sec"] = tiresOneSkid;
+
+        // Frame 1: Skid detected on left wheel -> pulse timer set to 0.1s, brake pulsed to 0.0f
+        g_registeredFlightLoopCallback(0.02f, 0.02f, 51, nullptr);
+        TEST_ASSERT(g_mockFloatDataRefs["sim/flightmodel/controls/l_brake_add"] == 0.0f);
+        TEST_ASSERT(std::abs(g_mockFloatDataRefs["sim/flightmodel/controls/r_brake_add"] - 0.8f) < 0.0001f);
+        TEST_ASSERT(std::abs(gAbsReleaseTimerLeft - 0.1f) < 0.0001f);
+        TEST_ASSERT(gAbsReleaseTimerRight == 0.0f);
+
+        // Frame 2: During pulse (dt = 0.04s) -> timer decrements to 0.06s, brake remains 0.0f
+        g_registeredFlightLoopCallback(0.04f, 0.04f, 52, nullptr);
+        TEST_ASSERT(g_mockFloatDataRefs["sim/flightmodel/controls/l_brake_add"] == 0.0f);
+        TEST_ASSERT(std::abs(gAbsReleaseTimerLeft - 0.06f) < 0.0001f);
+
+        // Frame 3: Remaining pulse elapsed (dt = 0.06s) -> timer reaches 0.0s, brake remains 0.0f
+        g_registeredFlightLoopCallback(0.06f, 0.06f, 53, nullptr);
+        TEST_ASSERT(g_mockFloatDataRefs["sim/flightmodel/controls/l_brake_add"] == 0.0f);
+        TEST_ASSERT(std::abs(gAbsReleaseTimerLeft) < 0.0001f);
+
+        // Frame 4: Wheel spin-up recovered (33.333 rad/s) -> normal braking restored on left wheel
+        std::vector<float> tiresRecovered = {0.0f, 33.3333f, 33.3333f, 0.0f};
+        g_mockFloatArrayDataRefs["sim/flightmodel/parts/tire_rot_speed_rad_sec"] = tiresRecovered;
+        g_registeredFlightLoopCallback(0.02f, 0.02f, 54, nullptr);
+        TEST_ASSERT(std::abs(g_mockFloatDataRefs["sim/flightmodel/controls/l_brake_add"] - 0.8f) < 0.0001f);
+        TEST_ASSERT(std::abs(g_mockFloatDataRefs["sim/flightmodel/controls/r_brake_add"] - 0.8f) < 0.0001f);
+
+        // Scenario C: Right wheel skid detected
+        std::vector<float> tiresRightSkid = {0.0f, 33.3333f, 0.0f, 0.0f};
+        g_mockFloatArrayDataRefs["sim/flightmodel/parts/tire_rot_speed_rad_sec"] = tiresRightSkid;
+        g_registeredFlightLoopCallback(0.02f, 0.02f, 55, nullptr);
+        TEST_ASSERT(std::abs(g_mockFloatDataRefs["sim/flightmodel/controls/l_brake_add"] - 0.8f) < 0.0001f);
+        TEST_ASSERT(g_mockFloatDataRefs["sim/flightmodel/controls/r_brake_add"] == 0.0f);
+        TEST_ASSERT(std::abs(gAbsReleaseTimerRight - 0.1f) < 0.0001f);
+        printf("  [PASS] Universal ABS skid detection, pulse timer, and wheel recovery\n");
+    }
+
+    // Test 14: X-Plane 12 Datarefs & Missing Dataref Graceful Fallback
+    {
+        ResetMockValues();
+        g_mockIntDataRefs["sim/flightmodel/failures/onground_any"] = 1;
+        g_mockFloatDataRefs["sim/flightmodel/position/groundspeed"] = 10.0f;
+        gCurrentProgressiveBrake = 0.7f;
+        gTargetProgressiveBrake = 0.7f;
+
+        // X-Plane 12 standard datarefs
+        std::vector<float> xp12Radii = {0.0f, 0.35f, 0.35f, 0.0f};
+        g_mockFloatArrayDataRefs["sim/flightmodel2/gear/tire_radius_mtrs"] = xp12Radii;
+        std::vector<float> xp12Tires = {0.0f, 30.0f, 30.0f, 0.0f};
+        g_mockFloatArrayDataRefs["sim/flightmodel2/gear/tire_rotation_speed_rad_sec"] = xp12Tires;
+
+        // Force dataref resolution update
+        gTireRotSpeedDataRef = nullptr;
+        gGearRadiiDataRef = nullptr;
+        FindDataRefsIfNeeded();
+        TEST_ASSERT(gTireRotSpeedDataRef != nullptr);
+        TEST_ASSERT(gGearRadiiDataRef != nullptr);
+
+        g_registeredFlightLoopCallback(0.02f, 0.02f, 60, nullptr);
+        TEST_ASSERT(std::abs(g_mockFloatDataRefs["sim/flightmodel/controls/l_brake_add"] - 0.7f) < 0.0001f);
+        TEST_ASSERT(std::abs(g_mockFloatDataRefs["sim/flightmodel/controls/r_brake_add"] - 0.7f) < 0.0001f);
+
+        // When gear radii are 0, ABS must not falsely zero out braking force
+        std::vector<float> zeroRadii = {0.0f, 0.0f, 0.0f, 0.0f};
+        g_mockFloatArrayDataRefs["sim/flightmodel2/gear/tire_radius_mtrs"] = zeroRadii;
+        g_registeredFlightLoopCallback(0.02f, 0.02f, 61, nullptr);
+        TEST_ASSERT(std::abs(g_mockFloatDataRefs["sim/flightmodel/controls/l_brake_add"] - 0.7f) < 0.0001f);
+        TEST_ASSERT(std::abs(g_mockFloatDataRefs["sim/flightmodel/controls/r_brake_add"] - 0.7f) < 0.0001f);
+        printf("  [PASS] X-Plane 12 datarefs and zero radius graceful fallback\n");
+    }
+
     XPluginStop();
     TEST_ASSERT(g_registeredFlightLoopCallback == nullptr);
-    printf("  [PASS] Plugin stop\n");
+    TEST_ASSERT(g_mockCommands["diffbrakeplugin/braking/hold_brakes_progressive_abs"].handler == nullptr);
+    printf("  [PASS] Plugin stop & unregister command handler\n");
 
     printf("\nAll tests passed successfully!\n");
     return 0;
