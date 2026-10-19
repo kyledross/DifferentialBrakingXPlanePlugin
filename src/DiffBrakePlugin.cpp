@@ -47,13 +47,13 @@ namespace
         kMaxGroundspeedForBrakingKnots * kKnotsToMetersPerSecond;
 
     // Progressive braking ramp rates (pressure units per second).
-    constexpr float kProgressiveRampUpRate = 0.75f;
-    constexpr float kProgressiveRampDownRate = 1.5f;
+    constexpr float kProgressiveRampUpRate = 0.10f;
+    constexpr float kProgressiveRampDownRate = 0.50f;
 
     // Two-stage progressive braking configuration:
     // Stage 1 caps force to allow smooth taxi deceleration and prevent excessive tire wear.
-    constexpr float kStage1BrakeCap = 0.75f;
-    constexpr float kStage1Duration = 5.0f;
+    constexpr float kStage1BrakeCap = 0.50f;
+    constexpr float kStage1Duration = 10.0f;
 
     // Minimum groundspeed (m/s) required for Anti-Skid (ABS) activation.
     constexpr float kMinAbsGroundspeedMs = 5.0f;

@@ -136,9 +136,9 @@ The plugin registers a dedicated custom command:
 
 Pilots can bind this command to a joystick button, throttle paddle, or keyboard key in X-Plane's settings (**Settings > Joystick / Keyboard**).
 
-- **Stage 1 (Controlled Taxi Deceleration):** Holding the command smoothly ramps brake pressure up at 0.75 units/second, capped at 75% force (`0.75`) for the first 5.0 seconds. This allows smooth, controlled deceleration during taxiing without jarring stops or excessive tire wear.
-- **Stage 2 (Full Stopping Power):** Continuing to hold the command past 5.0 seconds automatically transitions to Stage 2, ramping pressure up to 100% force (`1.0`) for maximum deceleration during short-field landings or emergency stops.
-- **Smooth Release:** Releasing the command ramps pressure back down at 1.5 units/second to prevent abrupt weight transfer and nose bounce.
+- **Stage 1 (Controlled Taxi Deceleration):** Holding the command smoothly ramps brake pressure up at 0.10 units/second, capped at 50% force (`0.50`) for the first 10.0 seconds (reaching 50% across 5.0 seconds and holding for another 5.0 seconds). This allows smooth, controlled deceleration during taxiing without jarring stops or excessive tire wear.
+- **Stage 2 (Full Stopping Power):** Continuing to hold the command past 10.0 seconds automatically transitions to Stage 2, ramping pressure up to 100% force (`1.0`) across 5.0 seconds for maximum deceleration during short-field landings or emergency stops.
+- **Smooth Release:** Releasing the command ramps pressure back down at 0.50 units/second to prevent abrupt weight transfer and nose bounce.
 
 ### 3. Universal Anti-Skid / Anti-Lock Braking System (ABS)
 Active across all aircraft when groundspeed exceeds 5.0 m/s (~9.7 knots):
@@ -164,8 +164,8 @@ Active across all aircraft when groundspeed exceeds 5.0 m/s (~9.7 knots):
   (`sim/cockpit2/engine/actuators/throttle_ratio_all`), only braking
   differentially below 50% throttle.
 - **Progressive Braking Accumulator:** When the `hold_brakes_progressive_abs` command
-  is held, an internal hold duration timer advances. While under 5 seconds,
-  pressure ramps up to a 75% cap; beyond 5 seconds, pressure ramps up to 100%.
+  is held, an internal hold duration timer advances. While under 10 seconds,
+  pressure ramps up to a 50% cap; beyond 10 seconds, pressure ramps up to 100%.
   When released, pressure smoothly drains to zero.
 - **Differential Steering Mapping:** Rudder/yaw input is read from
   `sim/joystick/yoke_heading_ratio` and mapped onto differential brake targets,
@@ -203,13 +203,13 @@ adjusted if needed:
 
 ### Progressive Braking
 - `kProgressiveRampUpRate` – rate (pressure units per second) at which progressive
-  brake pressure builds up (default `0.75`).
+  brake pressure builds up (default `0.10`).
 - `kProgressiveRampDownRate` – rate (pressure units per second) at which progressive
-  brake pressure releases (default `1.5`).
+  brake pressure releases (default `0.50`).
 - `kStage1BrakeCap` – maximum brake force (0.0–1.0) allowed during Stage 1
-  application (default `0.75`, i.e. 75%).
+  application (default `0.50`, i.e. 50%).
 - `kStage1Duration` – hold duration (in seconds) before progressing from Stage 1 to
-  Stage 2 full braking (default `5.0` s).
+  Stage 2 full braking (default `10.0` s).
 
 ### Anti-Skid (ABS)
 - `kMinAbsGroundspeedMs` – minimum groundspeed in meters/second (~9.7 knots) required

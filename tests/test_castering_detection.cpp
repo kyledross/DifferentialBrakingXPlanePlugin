@@ -438,52 +438,67 @@ int main() {
         gCurrentProgressiveBrake = 0.0f;
         gBrakeHoldDuration = 0.0f;
 
-        // Stage 1 initial ramp: 0.5s * 0.75 = 0.375
-        g_registeredFlightLoopCallback(0.5f, 0.5f, 30, nullptr);
-        TEST_ASSERT(std::abs(gCurrentProgressiveBrake - 0.375f) < 0.0001f);
-        TEST_ASSERT(std::abs(g_mockFloatDataRefs["sim/flightmodel/controls/l_brake_add"] - 0.375f) < 0.0001f);
-        TEST_ASSERT(std::abs(g_mockFloatDataRefs["sim/flightmodel/controls/r_brake_add"] - 0.375f) < 0.0001f);
+        // Stage 1 initial ramp: 2.5s * 0.1 = 0.25
+        g_registeredFlightLoopCallback(2.5f, 2.5f, 30, nullptr);
+        TEST_ASSERT(std::abs(gCurrentProgressiveBrake - 0.25f) < 0.0001f);
+        TEST_ASSERT(std::abs(g_mockFloatDataRefs["sim/flightmodel/controls/l_brake_add"] - 0.25f) < 0.0001f);
+        TEST_ASSERT(std::abs(g_mockFloatDataRefs["sim/flightmodel/controls/r_brake_add"] - 0.25f) < 0.0001f);
 
-        // Stage 1 cap: another 0.5s (1.0s total): reached 0.75f cap
-        g_registeredFlightLoopCallback(0.5f, 0.5f, 31, nullptr);
-        TEST_ASSERT(std::abs(gCurrentProgressiveBrake - 0.75f) < 0.0001f);
-        TEST_ASSERT(std::abs(g_mockFloatDataRefs["sim/flightmodel/controls/l_brake_add"] - 0.75f) < 0.0001f);
+        // Stage 1 cap: another 2.5s (5.0s total): reached 0.50f cap
+        g_registeredFlightLoopCallback(2.5f, 2.5f, 31, nullptr);
+        TEST_ASSERT(std::abs(gCurrentProgressiveBrake - 0.50f) < 0.0001f);
+        TEST_ASSERT(std::abs(g_mockFloatDataRefs["sim/flightmodel/controls/l_brake_add"] - 0.50f) < 0.0001f);
 
-        // Stage 1 plateau: hold for another 3.0s (4.0s total): remains capped at 0.75f
-        g_registeredFlightLoopCallback(3.0f, 3.0f, 32, nullptr);
-        TEST_ASSERT(std::abs(gCurrentProgressiveBrake - 0.75f) < 0.0001f);
-        TEST_ASSERT(std::abs(g_mockFloatDataRefs["sim/flightmodel/controls/l_brake_add"] - 0.75f) < 0.0001f);
+        // Stage 1 plateau: hold for another 4.0s (9.0s total): remains capped at 0.50f
+        g_registeredFlightLoopCallback(4.0f, 4.0f, 32, nullptr);
+        TEST_ASSERT(std::abs(gCurrentProgressiveBrake - 0.50f) < 0.0001f);
+        TEST_ASSERT(std::abs(g_mockFloatDataRefs["sim/flightmodel/controls/l_brake_add"] - 0.50f) < 0.0001f);
 
-        // Stage 2 transition: hold for another 1.5s (5.5s total -> escalates past 5.0s to 1.0f)
-        g_registeredFlightLoopCallback(1.5f, 1.5f, 33, nullptr);
+        // Stage 2 transition: hold for another 1.0s (10.0s total -> escalates past 10.0s: 0.50 + 1.0 * 0.1 = 0.60f)
+        g_registeredFlightLoopCallback(1.0f, 1.0f, 33, nullptr);
+        TEST_ASSERT(std::abs(gCurrentProgressiveBrake - 0.60f) < 0.0001f);
+        TEST_ASSERT(std::abs(g_mockFloatDataRefs["sim/flightmodel/controls/l_brake_add"] - 0.60f) < 0.0001f);
+
+        // Stage 2 completion: hold for another 4.0s (14.0s total -> reaches 1.0f full braking)
+        g_registeredFlightLoopCallback(4.0f, 4.0f, 34, nullptr);
         TEST_ASSERT(std::abs(gCurrentProgressiveBrake - 1.0f) < 0.0001f);
         TEST_ASSERT(std::abs(g_mockFloatDataRefs["sim/flightmodel/controls/l_brake_add"] - 1.0f) < 0.0001f);
 
-        // Release command: ramp down for 0.2s: 1.0 - (0.2 * 1.5) = 0.70f
+        // Stage 2 plateau: hold at 100%
+        g_registeredFlightLoopCallback(1.0f, 1.0f, 35, nullptr);
+        TEST_ASSERT(std::abs(gCurrentProgressiveBrake - 1.0f) < 0.0001f);
+        TEST_ASSERT(std::abs(g_mockFloatDataRefs["sim/flightmodel/controls/l_brake_add"] - 1.0f) < 0.0001f);
+
+        // Release command: ramp down for 0.5s: 1.0 - (0.5 * 0.5) = 0.75f
         cmdInfo.handler(gProgressiveBrakeCmd, xplm_CommandEnd, cmdInfo.refcon);
         TEST_ASSERT(gTargetProgressiveBrake == 0.0f);
         TEST_ASSERT(gBrakeHoldDuration == 0.0f);
-        g_registeredFlightLoopCallback(0.2f, 0.2f, 34, nullptr);
-        TEST_ASSERT(std::abs(gCurrentProgressiveBrake - 0.70f) < 0.0001f);
-        TEST_ASSERT(std::abs(g_mockFloatDataRefs["sim/flightmodel/controls/l_brake_add"] - 0.70f) < 0.0001f);
+        g_registeredFlightLoopCallback(0.5f, 0.5f, 36, nullptr);
+        TEST_ASSERT(std::abs(gCurrentProgressiveBrake - 0.75f) < 0.0001f);
+        TEST_ASSERT(std::abs(g_mockFloatDataRefs["sim/flightmodel/controls/l_brake_add"] - 0.75f) < 0.0001f);
 
-        // Ramp down for another 0.6s: 0.70 - (0.6 * 1.5) = -0.20 -> clamped to 0.0f
-        g_registeredFlightLoopCallback(0.6f, 0.6f, 35, nullptr);
+        // Ramp down for another 1.0s: 0.75 - (1.0 * 0.5) = 0.25f
+        g_registeredFlightLoopCallback(1.0f, 1.0f, 37, nullptr);
+        TEST_ASSERT(std::abs(gCurrentProgressiveBrake - 0.25f) < 0.0001f);
+        TEST_ASSERT(std::abs(g_mockFloatDataRefs["sim/flightmodel/controls/l_brake_add"] - 0.25f) < 0.0001f);
+
+        // Ramp down for another 1.0s: 0.25 - (1.0 * 0.5) = -0.25 -> clamped to 0.0f
+        g_registeredFlightLoopCallback(1.0f, 1.0f, 38, nullptr);
         TEST_ASSERT(std::abs(gCurrentProgressiveBrake - 0.0f) < 0.0001f);
         TEST_ASSERT(g_mockFloatDataRefs["sim/flightmodel/controls/l_brake_add"] == 0.0f);
         TEST_ASSERT(g_mockFloatDataRefs["sim/flightmodel/controls/r_brake_add"] == 0.0f);
 
-        // Re-trigger command after release: must reset duration and cap at Stage 1 (0.75f) again
+        // Re-trigger command after release: must reset duration and cap at Stage 1 (0.50f) again
         cmdInfo.handler(gProgressiveBrakeCmd, xplm_CommandBegin, cmdInfo.refcon);
         TEST_ASSERT(gTargetProgressiveBrake == 1.0f);
         TEST_ASSERT(gBrakeHoldDuration == 0.0f);
-        // Ramp up for 2.0s: reaches 0.75f and remains capped at 0.75f
-        g_registeredFlightLoopCallback(2.0f, 2.0f, 36, nullptr);
-        TEST_ASSERT(std::abs(gCurrentProgressiveBrake - 0.75f) < 0.0001f);
-        TEST_ASSERT(std::abs(g_mockFloatDataRefs["sim/flightmodel/controls/l_brake_add"] - 0.75f) < 0.0001f);
+        // Ramp up for 5.0s: reaches 0.50f and remains capped at 0.50f
+        g_registeredFlightLoopCallback(5.0f, 5.0f, 39, nullptr);
+        TEST_ASSERT(std::abs(gCurrentProgressiveBrake - 0.50f) < 0.0001f);
+        TEST_ASSERT(std::abs(g_mockFloatDataRefs["sim/flightmodel/controls/l_brake_add"] - 0.50f) < 0.0001f);
 
         cmdInfo.handler(gProgressiveBrakeCmd, xplm_CommandEnd, cmdInfo.refcon);
-        g_registeredFlightLoopCallback(1.0f, 1.0f, 37, nullptr);
+        g_registeredFlightLoopCallback(1.0f, 1.0f, 40, nullptr);
         TEST_ASSERT(std::abs(gCurrentProgressiveBrake - 0.0f) < 0.0001f);
         printf("  [PASS] Two-stage progressive brake ramp up, plateau, escalation, and ramp down\n");
     }
@@ -510,7 +525,7 @@ int main() {
         TEST_ASSERT(std::abs(g_mockFloatDataRefs["sim/flightmodel/controls/r_brake_add"] - (0.085f + 0.5f)) < 0.0001f);
 
         // Saturation clamping to 1.0f
-        gBrakeHoldDuration = 6.0f;
+        gBrakeHoldDuration = 12.0f;
         gCurrentProgressiveBrake = 0.95f;
         gTargetProgressiveBrake = 0.95f;
         g_registeredFlightLoopCallback(0.01f, 0.01f, 41, nullptr);
@@ -537,7 +552,7 @@ int main() {
     {
         ResetMockValues();
         g_mockIntDataRefs["sim/flightmodel/failures/onground_any"] = 1;
-        gBrakeHoldDuration = 6.0f;
+        gBrakeHoldDuration = 12.0f;
         gCurrentProgressiveBrake = 0.8f;
         gTargetProgressiveBrake = 0.8f;
 
@@ -603,6 +618,7 @@ int main() {
         ResetMockValues();
         g_mockIntDataRefs["sim/flightmodel/failures/onground_any"] = 1;
         g_mockFloatDataRefs["sim/flightmodel/position/groundspeed"] = 10.0f;
+        gBrakeHoldDuration = 12.0f;
         gCurrentProgressiveBrake = 0.7f;
         gTargetProgressiveBrake = 0.7f;
 
