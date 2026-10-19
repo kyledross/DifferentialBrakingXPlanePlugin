@@ -6,14 +6,16 @@ Note:
 This software is not affiliated with, endorsed by, or supported by Laminar Research. All trademarks are the property of
 their respective owners and are used herein for reference only.
 
-This is a native X-Plane plugin that fixes some steering quirks with aircraft.  Specifically, it eliminates the 
-jerkiness that is found on some aircraft.  It does this by disabling the gear braking provided by the simulator on
-all aircraft and replacing the built-in differential braking on castered aircraft with more predictable and smooth
-steering logic.
+This is a native X-Plane plugin that fixes steering quirks and improves ground braking
+dynamics for simulated aircraft. Specifically, it eliminates the jerkiness found
+on castering aircraft by replacing built-in differential braking with smooth,
+predictable steering logic. Additionally, it provides a two-stage progressive braking
+system with integrated Anti-Skid (ABS) protection across aircraft to ensure smooth taxiing,
+maximum stopping efficiency, and prevention of tire lockup.
 
-The behavior of the plugin is set with various constants regarding maximum brake force, rate of change, and so-on.
-The defaults seem to be fairly reasonable, so I have not implemented any UI to change them.
-Perhaps that will come in a later revision.
+The behavior of the plugin is set with various constants regarding maximum brake force,
+ramp rates, ABS thresholds, and so-on. The defaults are tuned for optimal handling and stability,
+so no in-sim UI is required.
 
 If this software enhances your experience, please consider supporting the project:  
 https://buymeacoffee.com/kyledross
@@ -122,18 +124,38 @@ git push origin v1.0.0
 
 Review and publish the draft release in GitHub after the workflow completes.
 
+## Features and Controls
+
+### 1. Smooth Differential Brake Steering
+For aircraft with free-castering nose or tail gear (such as the Cirrus SR22 and SF50 Vision Jet), rudder inputs on the ground are mapped directly to gentle differential braking. This eliminates the abrupt jerks caused by simulator auto-toe-brake helpers while allowing natural, predictable low-speed ground maneuvering.
+
+### 2. Two-Stage Progressive Braking
+The plugin registers a dedicated custom command:
+- **Command:** `diffbrakeplugin/braking/hold_brakes_progressive_abs`
+- **Description:** `Hold Brakes (Progressive with ABS)`
+
+Pilots can bind this command to a joystick button, throttle paddle, or keyboard key in X-Plane's settings (**Settings > Joystick / Keyboard**).
+
+- **Stage 1 (Controlled Taxi Deceleration):** Holding the command smoothly ramps brake pressure up at 0.75 units/second, capped at 75% force (`0.75`) for the first 5.0 seconds. This allows smooth, controlled deceleration during taxiing without jarring stops or excessive tire wear.
+- **Stage 2 (Full Stopping Power):** Continuing to hold the command past 5.0 seconds automatically transitions to Stage 2, ramping pressure up to 100% force (`1.0`) for maximum deceleration during short-field landings or emergency stops.
+- **Smooth Release:** Releasing the command ramps pressure back down at 1.5 units/second to prevent abrupt weight transfer and nose bounce.
+
+### 3. Universal Anti-Skid / Anti-Lock Braking System (ABS)
+Active across all aircraft when groundspeed exceeds 5.0 m/s (~9.7 knots):
+- Continuously monitors left and right main gear rotational velocities against true aircraft groundspeed.
+- If a wheel enters a skid (wheel slip ratio drops below 0.40, meaning the wheel's linear speed is under 40% of groundspeed), brake pressure to that specific wheel is immediately pulsed off for 0.1 seconds (100 ms) to restore wheel spin.
+- Prevents tire skidding, blowouts, and loss of directional stability during high-speed rollout braking.
+
 ## How it works
 
 - A single flight loop callback (`XPLMRegisterFlightLoopCallback`) runs once
-  per frame. It only performs a handful of dataref reads and, at most, two
-  writes, so it has no measurable impact on sim performance.
-- The plugin automatically detects whether the loaded aircraft has a
-  free-castering steering by checking whether the active aircraft (`.acf`) file
-  configures free-castoring gear (`_gear_castors 1`, as in the Cirrus SF50 and
-  Cirrus SR22), or by inspecting the steering deflection limits
+  per frame. It performs lightweight dataref operations with no measurable impact
+  on flight simulator performance.
+- The plugin automatically detects whether the loaded aircraft has
+  free-castering steering by inspecting the active aircraft (`.acf`) configuration
+  (`_gear_castors 1`) or steering deflection limits
   (`sim/aircraft/gear/acf_nw_steerdeg1` and `sim/aircraft/gear/acf_nw_steerdeg2`
-  $\le 0.05^\circ$). When castering gear is detected, the plugin enables
-  differential braking. This re-evaluates upon aircraft load
+  $\le 0.05^\circ$). This re-evaluates upon aircraft load
   (`XPLM_MSG_PLANE_LOADED`) without requiring an aircraft whitelist.
 - Ground contact and speed are read from
   `sim/flightmodel/failures/onground_any` and
@@ -141,82 +163,75 @@ Review and publish the draft release in GitHub after the workflow completes.
   the plugin falls back to gating on throttle position
   (`sim/cockpit2/engine/actuators/throttle_ratio_all`), only braking
   differentially below 50% throttle.
-- Rudder/yaw input is read from `sim/joystick/yoke_heading_ratio` and mapped
-  onto `sim/flightmodel/controls/l_brake_add` and
-  `sim/flightmodel/controls/r_brake_add`, capped at 8.5% brake force even at
-  full rudder deflection to avoid accidental maximum braking. These "add"
-  datarefs apply additional brake force on top of whatever the pilot's brake
-  pedals/axis are already commanding, so the plugin never has to take
-  ownership of (i.e. override) the normal brake controls.
-- Rudder-to-brake mapping retains a small center deadzone to absorb joystick
-  centering noise. Beyond it, the selected brake's added force is linear and
-  directly proportional to rudder deflection, updating immediately each
-  flight-loop frame without ramping pressure up or down.
-- The left/right brake force is derived from one signed brake-balance value
-  (negative = left brake, positive = right brake), so only one side receives
-  added braking at a time. Reversing rudder direction immediately releases
-  the old side and applies the proportional force on the new side.
-- While differential braking is active, the plugin also zeroes
+- **Progressive Braking Accumulator:** When the `hold_brakes_progressive_abs` command
+  is held, an internal hold duration timer advances. While under 5 seconds,
+  pressure ramps up to a 75% cap; beyond 5 seconds, pressure ramps up to 100%.
+  When released, pressure smoothly drains to zero.
+- **Differential Steering Mapping:** Rudder/yaw input is read from
+  `sim/joystick/yoke_heading_ratio` and mapped onto differential brake targets,
+  capped at 8.5% brake force to maintain steady forward motion during turns. A small
+  center deadzone absorbs hardware noise/jitter.
+- While differential braking is active on castering aircraft, the plugin zeroes
   `sim/flightmodel/controls/rudder_ratio` every frame so rudder pedal input
-  no longer deflects the aerodynamic rudder surface at the same time it is
-  applying brakes. This prevents "dual-steering" from both the rudder and
-  the brakes fighting each other; the rudder is returned to normal joystick
-  control as soon as differential braking becomes inactive.
+  does not deflect the aerodynamic rudder surface at the same time, preventing
+  opposing control fighting.
+- **Force Blending:** The per-wheel differential braking force is added to the current
+  progressive brake pressure and clamped to a maximum ratio of 1.0.
+- **Anti-Skid (ABS) Monitoring:** When groundspeed is above 5.0 m/s and brakes are applied,
+  wheel tangential speeds are calculated from tire rotational velocity
+  (`sim/flightmodel2/gear/tire_rotation_speed_rad_sec` or fallback `sim/flightmodel/parts/tire_rot_speed_rad_sec`)
+  and gear radius (`sim/flightmodel2/gear/tire_radius_mtrs` or fallbacks `sim/aircraft/parts/acf_gear_tirrad`, `sim/aircraft/parts/acf_gear_radi`).
+  If slip drops below 40%, the affected wheel's brake is pulsed off for 0.1 seconds.
+- **Dataref Output:** The final calculated forces are written to
+  `sim/flightmodel/controls/l_brake_add` and `sim/flightmodel/controls/r_brake_add`.
+  These "add" datarefs apply brake force additively on top of hardware toe brake pedals
+  without overriding the pilot's physical hardware controls.
 - While enabled, the plugin sets
-  `sim/operation/override/override_gearbrake` to `1` for every aircraft.
-  This bypasses X-Plane's built-in auto-toe-brake helper, which can apply
-  abrupt braking at steering extremes. The plugin supplies differential
-  braking only for detected castering aircraft; normal braking remains under
-  simulator control for other aircraft.
-- The plugin does **not** set `sim/operation/override/override_wheel_steer`.
-  It was tried in an earlier revision on the theory that X-Plane's native
-  nosewheel-steering model was the remaining cause of an abrupt "stop"
-  feeling when reversing rudder direction. However, per X-Plane's own
-  `DataRefs.txt`, that override only lets a plugin drive
-  `sim/flightmodel2/gear/tire_steer_command_deg` directly - it does not make
-  the nosewheel free-caster by itself. Since this plugin never writes a
-  steer command, enabling it actually froze the nosewheel at whatever angle
-  it last had instead of letting it free-caster, which caused binding and
-  produced the very "stop" symptom it was meant to fix. Leaving this
-  override alone lets X-Plane's normal free-castering nosewheel physics run
-  (which is how the real Cirrus's nosewheel behaves), while
-  `override_gearbrake` remains enabled until the plugin is disabled, when it
-  is reverted to `0` to give control back to X-Plane.
-- All log entries are written to `Log.txt` and prefixed with
-  `DiffBrakePlugin: ` for easy searching. The plugin logs once when a
-  castering aircraft is detected, once on each ground/air transition, once on each
-  activation/deactivation of differential braking, and optionally (when
-  debug logging is enabled and differential braking is actively applied)
-  throttled to once per quarter second with the rudder input and resulting brake
-  forces for debugging.
-  This trace also includes the actual brake ratio X-Plane reports it is
-  using per wheel (`sim/cockpit2/controls/left_brake_ratio` /
-  `right_brake_ratio`); if those values are noticeably higher than what the
-  plugin requested, that is evidence X-Plane's native auto-toe-brake logic
-  is still contributing braking on top of ours despite the override above.
+  `sim/operation/override/override_gearbrake` to `1` for every aircraft to bypass
+  X-Plane's abrupt built-in auto-toe-brake helper. The plugin does not override
+  `sim/operation/override/override_wheel_steer`, allowing native free-castering physics
+  to operate naturally without steering binding.
+- All log entries are written to `Log.txt` prefixed with `DiffBrakePlugin: ` for
+  easy inspection. State transitions (aircraft detection, ground/air changes, and
+  differential braking activation) are logged once per event. Continuous brake force
+  traces can be enabled for debugging.
 
 ## Tuning
 
 The following constants at the top of `src/DiffBrakePlugin.cpp` can be
 adjusted if needed:
 
+### Progressive Braking
+- `kProgressiveRampUpRate` – rate (pressure units per second) at which progressive
+  brake pressure builds up (default `0.75`).
+- `kProgressiveRampDownRate` – rate (pressure units per second) at which progressive
+  brake pressure releases (default `1.5`).
+- `kStage1BrakeCap` – maximum brake force (0.0–1.0) allowed during Stage 1
+  application (default `0.75`, i.e. 75%).
+- `kStage1Duration` – hold duration (in seconds) before progressing from Stage 1 to
+  Stage 2 full braking (default `5.0` s).
+
+### Anti-Skid (ABS)
+- `kMinAbsGroundspeedMs` – minimum groundspeed in meters/second (~9.7 knots) required
+  for ABS logic to engage (default `5.0` m/s).
+- `kSkidSlipRatio` – wheel slip ratio threshold below which a wheel is flagged as
+  skidding (default `0.4`, i.e. 40% of groundspeed).
+- `kAbsPulseTime` – duration in seconds to pulse release brake pressure when a skid
+  is detected (default `0.1` s).
+
+### Differential Braking
 - `kMaxGroundspeedForBrakingKnots` – speed below which differential braking
-  is engaged (default 45 kts).
-- `kMaxBrakeForce` – maximum additive brake force applied per side, in the
-  0.0–1.0 range (default 0.085, i.e. 8.5%). Kept deliberately low: steering
-  only needs a gentle retarding force on one wheel to create a turning
-  moment — heavier braking slows the aircraft dramatically and causes a
-  "jerk to a stop" feel when reversing direction.
+  is engaged (default `45.0` kts).
+- `kMaxBrakeForce` – maximum additive differential brake force applied per side, in the
+  0.0–1.0 range (default `0.085`, i.e. 8.5%).
 - `kMaxThrottleForBraking` – fallback throttle threshold (0.0–1.0) used to
-  gate differential braking when groundspeed is unavailable (default 0.5,
+  gate differential braking when groundspeed is unavailable (default `0.5`,
   i.e. 50%).
 - `kYawInputDeadzone` – rudder input magnitude (0.0–1.0) below which no
-  brake is applied at all (default 0.05, i.e. 5%).
+  differential brake is applied (default `0.05`, i.e. 5%).
 - `kBrakeResponseCurveExponent` – exponent of the response curve applied to
-  rudder input beyond the deadzone before scaling to brake force (default
-  `1.0`, which is linear).
+  rudder input beyond the deadzone (default `1.0`, linear).
 - `kEnableDiffBrakingLog` – boolean flag to turn on/off continuous differential
   braking debug log messages while braking is applied (default `false`).
 - `kDiffBrakeLogInterval` – minimum interval (in seconds) between differential
-  braking debug log entries when enabled (default 0.25 s, i.e. once a quarter
-  second).
+  braking debug log entries when enabled (default `0.25` s).
