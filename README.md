@@ -11,7 +11,9 @@ dynamics for simulated aircraft. Specifically, it eliminates the jerkiness found
 on castering aircraft by replacing built-in differential braking with smooth,
 predictable steering logic. Additionally, it provides a two-stage progressive braking
 system with integrated Anti-Skid (ABS) protection across aircraft to ensure smooth taxiing,
-maximum stopping efficiency, and prevention of tire lockup.
+maximum stopping efficiency, and prevention of tire lockup.  This is helpful if you have braking mapped to a 
+non-proportional button on a joystick, for example.  In such a scenario, braking is either all or nothing.  With this 
+plugin, braking is gradual and can back off braking should there be wheel skidding.
 
 The behavior of the plugin is set with various constants regarding maximum brake force,
 ramp rates, ABS thresholds, and so-on.  You may adapt and build this software to suit
