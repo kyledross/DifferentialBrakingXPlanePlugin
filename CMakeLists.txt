@@ -7,12 +7,33 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(DIFF_BRAKE_PLUGIN_VERSION "development" CACHE STRING
         "Version displayed in X-Plane plugin information")
 
-add_library(DiffBrakePlugin SHARED
-        src/DiffBrakePlugin.cpp)
+find_package(OpenGL REQUIRED)
+
+set(IMGUI_SOURCES
+    src/imgui/imgui.cpp
+    src/imgui/imgui_draw.cpp
+    src/imgui/imgui_impl_opengl3.cpp
+    src/imgui/imgui_tables.cpp
+    src/imgui/imgui_widgets.cpp
+)
+
+set(PLUGIN_SOURCES
+    src/DiffBrakePlugin.cpp
+    src/SettingsManager.cpp
+    src/SettingsUI.cpp
+    ${IMGUI_SOURCES}
+)
+
+add_library(DiffBrakePlugin SHARED ${PLUGIN_SOURCES})
 
 target_include_directories(DiffBrakePlugin PRIVATE
+        src
+        src/imgui
+        src/json
         SDK/CHeaders/XPLM
         SDK/CHeaders/Widgets)
+
+target_link_libraries(DiffBrakePlugin PRIVATE OpenGL::GL)
 
 # Tell the X-Plane SDK headers which platform we are targeting and that we
 # are compiling a plugin (not the XPLM library itself), plus which SDK
@@ -47,10 +68,18 @@ if (UNIX AND NOT APPLE)
 endif ()
 
 enable_testing()
-add_executable(test_castering_detection tests/test_castering_detection.cpp)
+add_executable(test_castering_detection
+        tests/test_castering_detection.cpp
+        src/SettingsManager.cpp
+        src/SettingsUI.cpp
+        ${IMGUI_SOURCES})
 target_include_directories(test_castering_detection PRIVATE
+        src
+        src/imgui
+        src/json
         SDK/CHeaders/XPLM
         SDK/CHeaders/Widgets)
+target_link_libraries(test_castering_detection PRIVATE OpenGL::GL)
 target_compile_definitions(test_castering_detection PRIVATE
         DIFF_BRAKE_PLUGIN_VERSION="${DIFF_BRAKE_PLUGIN_VERSION}"
         XPLM_API_VERSION=400

@@ -31,6 +31,9 @@
 
 // Include SDK headers needed for plugin types
 #include "XPLMDataAccess.h"
+#include "XPLMDisplay.h"
+#include "XPLMGraphics.h"
+#include "XPLMMenus.h"
 #include "XPLMPlanes.h"
 #include "XPLMPlugin.h"
 #include "XPLMProcessing.h"
@@ -53,11 +56,143 @@ struct MockCommand {
     XPLMCommandCallback_f handler = nullptr;
     int before = 0;
     void* refcon = nullptr;
+    int beginCount = 0;
+    int endCount = 0;
+    bool isActive = false;
 };
 static std::map<std::string, MockCommand> g_mockCommands;
 static std::map<XPLMCommandRef, std::string> g_commandRefToName;
 
+struct MockWindow {
+    XPLMCreateWindow_t params;
+    std::string title;
+    int left = 0, top = 0, right = 0, bottom = 0;
+    int visible = 0;
+    int minWidth = 0, minHeight = 0, maxWidth = 0, maxHeight = 0;
+};
+static std::map<XPLMWindowID, MockWindow> g_mockWindows;
+
+static std::string g_mockPluginFilePath = "/path/to/DiffBrakePlugin/lin_x64/DiffBrakePlugin.xpl";
+static void* g_mockPluginsMenu = reinterpret_cast<void*>(10);
+static void* g_mockDiffBrakeMenu = nullptr;
+static XPLMMenuHandler_f g_mockMenuHandler = nullptr;
+
 extern "C" {
+
+XPLMPluginID XPLMGetMyID(void) {
+    return 1;
+}
+
+void XPLMGetPluginInfo(XPLMPluginID /*inPlugin*/, char* outName, char* outFilePath, char* outSignature, char* outDescription) {
+    if (outName) std::strcpy(outName, "DiffBrakePlugin");
+    if (outFilePath) std::strcpy(outFilePath, g_mockPluginFilePath.c_str());
+    if (outSignature) std::strcpy(outSignature, "com.kyleross.diffbrakeplugin");
+    if (outDescription) std::strcpy(outDescription, "Diff brake plugin");
+}
+
+XPLMWindowID XPLMCreateWindowEx(XPLMCreateWindow_t* inParams) {
+    static intptr_t nextWinId = 100;
+    XPLMWindowID win = reinterpret_cast<XPLMWindowID>(nextWinId++);
+    MockWindow mw;
+    if (inParams) {
+        mw.params = *inParams;
+        mw.left = inParams->left;
+        mw.top = inParams->top;
+        mw.right = inParams->right;
+        mw.bottom = inParams->bottom;
+        mw.visible = inParams->visible;
+    }
+    g_mockWindows[win] = mw;
+    return win;
+}
+
+void XPLMDestroyWindow(XPLMWindowID inWindowID) {
+    g_mockWindows.erase(inWindowID);
+}
+
+void XPLMGetWindowGeometry(XPLMWindowID inWindowID, int* outLeft, int* outTop, int* outRight, int* outBottom) {
+    auto it = g_mockWindows.find(inWindowID);
+    if (it != g_mockWindows.end()) {
+        if (outLeft) *outLeft = it->second.left;
+        if (outTop) *outTop = it->second.top;
+        if (outRight) *outRight = it->second.right;
+        if (outBottom) *outBottom = it->second.bottom;
+    }
+}
+
+void XPLMSetWindowTitle(XPLMWindowID inWindowID, const char* inTitle) {
+    auto it = g_mockWindows.find(inWindowID);
+    if (it != g_mockWindows.end() && inTitle) {
+        it->second.title = inTitle;
+    }
+}
+
+void XPLMSetWindowResizingLimits(XPLMWindowID inWindowID, int inMinWidth, int inMinHeight, int inMaxWidth, int inMaxHeight) {
+    auto it = g_mockWindows.find(inWindowID);
+    if (it != g_mockWindows.end()) {
+        it->second.minWidth = inMinWidth;
+        it->second.minHeight = inMinHeight;
+        it->second.maxWidth = inMaxWidth;
+        it->second.maxHeight = inMaxHeight;
+    }
+}
+
+void XPLMSetWindowIsVisible(XPLMWindowID inWindowID, int inIsVisible) {
+    auto it = g_mockWindows.find(inWindowID);
+    if (it != g_mockWindows.end()) {
+        it->second.visible = inIsVisible;
+    }
+}
+
+int XPLMGetWindowIsVisible(XPLMWindowID inWindowID) {
+    auto it = g_mockWindows.find(inWindowID);
+    if (it != g_mockWindows.end()) {
+        return it->second.visible;
+    }
+    return 0;
+}
+
+void XPLMGetScreenBoundsGlobal(int* outLeft, int* outTop, int* outRight, int* outBottom) {
+    if (outLeft) *outLeft = 0;
+    if (outTop) *outTop = 1080;
+    if (outRight) *outRight = 1920;
+    if (outBottom) *outBottom = 0;
+}
+
+void XPLMGetMouseLocationGlobal(int* outX, int* outY) {
+    if (outX) *outX = 0;
+    if (outY) *outY = 0;
+}
+
+void XPLMBringWindowToFront(XPLMWindowID /*inWindowID*/) {
+}
+
+XPLMMenuID XPLMFindPluginsMenu(void) {
+    return g_mockPluginsMenu;
+}
+
+XPLMMenuID XPLMCreateMenu(const char* /*inName*/, XPLMMenuID /*inParentMenu*/, int /*inParentItem*/, XPLMMenuHandler_f inHandler, void* /*inMenuRef*/) {
+    static intptr_t nextMenuId = 20;
+    XPLMMenuID m = reinterpret_cast<XPLMMenuID>(nextMenuId++);
+    g_mockDiffBrakeMenu = m;
+    g_mockMenuHandler = inHandler;
+    return m;
+}
+
+void XPLMDestroyMenu(XPLMMenuID inMenuID) {
+    if (g_mockDiffBrakeMenu == inMenuID) {
+        g_mockDiffBrakeMenu = nullptr;
+        g_mockMenuHandler = nullptr;
+    }
+}
+
+int XPLMAppendMenuItem(XPLMMenuID /*inMenu*/, const char* /*inItemName*/, void* /*inItemRef*/, int /*inDeprecatedAndIgnored*/) {
+    static int nextItem = 0;
+    return nextItem++;
+}
+
+void XPLMSetGraphicsState(int /*inEnableFog*/, int /*inNumberTexUnits*/, int /*inEnableLighting*/, int /*inEnableAlphaTesting*/, int /*inEnableAlphaBlending*/, int /*inEnableDepthTesting*/, int /*inEnableDepthWriting*/) {
+}
 
 XPLMDataRef XPLMFindDataRef(const char* inDataRefName) {
     if (g_mockFloatDataRefs.find(inDataRefName) == g_mockFloatDataRefs.end() &&
@@ -148,6 +283,41 @@ XPLMCommandRef XPLMCreateCommand(const char* inName, const char* inDescription) 
     return handle;
 }
 
+XPLMCommandRef XPLMFindCommand(const char* inName) {
+    if (inName == nullptr) return nullptr;
+    if (g_mockCommands.find(inName) == g_mockCommands.end()) {
+        MockCommand cmd;
+        cmd.name = inName;
+        cmd.description = "";
+        g_mockCommands[inName] = cmd;
+    }
+    intptr_t id = static_cast<intptr_t>(std::hash<std::string>{}(inName));
+    XPLMCommandRef handle = reinterpret_cast<XPLMCommandRef>(id);
+    g_commandRefToName[handle] = inName;
+    return handle;
+}
+
+void XPLMCommandBegin(XPLMCommandRef inCommand) {
+    auto it = g_commandRefToName.find(inCommand);
+    if (it != g_commandRefToName.end()) {
+        g_mockCommands[it->second].beginCount++;
+        g_mockCommands[it->second].isActive = true;
+    }
+}
+
+void XPLMCommandEnd(XPLMCommandRef inCommand) {
+    auto it = g_commandRefToName.find(inCommand);
+    if (it != g_commandRefToName.end()) {
+        g_mockCommands[it->second].endCount++;
+        g_mockCommands[it->second].isActive = false;
+    }
+}
+
+void XPLMCommandOnce(XPLMCommandRef inCommand) {
+    XPLMCommandBegin(inCommand);
+    XPLMCommandEnd(inCommand);
+}
+
 void XPLMRegisterCommandHandler(XPLMCommandRef inCommand, XPLMCommandCallback_f inHandler, int inBefore, void* inRefcon) {
     auto it = g_commandRefToName.find(inCommand);
     if (it != g_commandRefToName.end()) {
@@ -206,6 +376,13 @@ void ResetMockValues() {
     gTargetProgressiveBrake = 0.0f;
     gBrakeHoldDuration = 0.0f;
     gCurrentProgressiveBrake = 0.0f;
+    gHoldBrakesRegularCmd = nullptr;
+    gIsHoldingRegularBrakes = false;
+    for (auto& pair : g_mockCommands) {
+        pair.second.beginCount = 0;
+        pair.second.endCount = 0;
+        pair.second.isActive = false;
+    }
 }
 
 int main() {
@@ -646,6 +823,240 @@ int main() {
         TEST_ASSERT(std::abs(g_mockFloatDataRefs["sim/flightmodel/controls/l_brake_add"] - 0.7f) < 0.0001f);
         TEST_ASSERT(std::abs(g_mockFloatDataRefs["sim/flightmodel/controls/r_brake_add"] - 0.7f) < 0.0001f);
         printf("  [PASS] X-Plane 12 datarefs and zero radius graceful fallback\n");
+    }
+
+    // Test 15: SettingsManager Unit Tests
+    {
+        std::string testJsonPath = "/tmp/test_diffbrake_settings.json";
+        std::remove(testJsonPath.c_str());
+
+        SettingsManager mgr(testJsonPath);
+        TEST_ASSERT(mgr.GetSettingsFilePath() == testJsonPath);
+        TEST_ASSERT(!mgr.HasAircraftSettings("Cirrus_SR22.acf"));
+
+        // New aircraft initialized to default (both true)
+        AircraftSettings defaultSettings = mgr.GetOrInitAircraftSettings("Cirrus_SR22.acf");
+        TEST_ASSERT(defaultSettings.enableDifferentialBraking == true);
+        TEST_ASSERT(defaultSettings.enableBrakingEnhancements == true);
+        TEST_ASSERT(mgr.HasAircraftSettings("Cirrus_SR22.acf"));
+
+        // Mutate settings for another aircraft
+        AircraftSettings customSettings{false, true};
+        mgr.SetAircraftSettings("C172.acf", customSettings);
+        TEST_ASSERT(mgr.Save());
+
+        // Reload from file
+        SettingsManager mgr2(testJsonPath);
+        TEST_ASSERT(mgr2.Load());
+        TEST_ASSERT(mgr2.HasAircraftSettings("Cirrus_SR22.acf"));
+        TEST_ASSERT(mgr2.HasAircraftSettings("C172.acf"));
+
+        AircraftSettings loadedSR22 = mgr2.GetAircraftSettings("Cirrus_SR22.acf");
+        TEST_ASSERT(loadedSR22.enableDifferentialBraking == true);
+        TEST_ASSERT(loadedSR22.enableBrakingEnhancements == true);
+
+        AircraftSettings loadedC172 = mgr2.GetAircraftSettings("C172.acf");
+        TEST_ASSERT(loadedC172.enableDifferentialBraking == false);
+        TEST_ASSERT(loadedC172.enableBrakingEnhancements == true);
+
+        // Path resolution helper tests
+        std::string res1 = SettingsManager::ResolveDefaultSettingsPath("/plugins/DiffBrakePlugin/lin_x64/DiffBrakePlugin.xpl");
+        TEST_ASSERT(res1.find("settings.json") != std::string::npos);
+
+        std::remove(testJsonPath.c_str());
+        printf("  [PASS] SettingsManager JSON serialization, loading, and per-aircraft segregation\n");
+    }
+
+    // Test 16: Aircraft Change Lifecycle and Settings Persistence
+    {
+        std::string testSettingsPath = "/tmp/test_diffbrake_lifecycle.json";
+        std::remove(testSettingsPath.c_str());
+
+        gSettingsManager.SetSettingsFilePath(testSettingsPath);
+        gSettingsManager.Clear();
+
+        // 1. Load Cirrus SR22 (castering)
+        g_mockAircraftFileName = "Cirrus_SR22.acf";
+        g_mockAircraftPath = "/path/to/Cirrus_SR22.acf";
+        g_mockFloatDataRefs["sim/aircraft/gear/acf_nw_steerdeg1"] = 0.0f;
+        g_mockFloatDataRefs["sim/aircraft/gear/acf_nw_steerdeg2"] = 0.0f;
+
+        XPluginReceiveMessage(0, XPLM_MSG_PLANE_LOADED, reinterpret_cast<void*>(0));
+        TEST_ASSERT(gIsCasteringAircraft);
+        TEST_ASSERT(gCurrentAircraftName == "Cirrus_SR22.acf");
+        TEST_ASSERT(gCurrentAircraftSettings.enableDifferentialBraking == true);
+        TEST_ASSERT(gCurrentAircraftSettings.enableBrakingEnhancements == true);
+        TEST_ASSERT(gSettingsManager.HasAircraftSettings("Cirrus_SR22.acf"));
+
+        // 2. Disable differential braking for Cirrus_SR22.acf
+        AircraftSettings disabledDiff{false, true};
+        gSettingsManager.SetAircraftSettings("Cirrus_SR22.acf", disabledDiff);
+        gSettingsManager.Save();
+        gCurrentAircraftSettings = disabledDiff;
+        SetSimSteeringOverrides(gCurrentAircraftSettings.enableDifferentialBraking);
+
+        // 3. Load a different aircraft (SF50.acf)
+        g_mockAircraftFileName = "SF50.acf";
+        g_mockAircraftPath = "/path/to/SF50.acf";
+        XPluginReceiveMessage(0, XPLM_MSG_PLANE_LOADED, reinterpret_cast<void*>(0));
+        TEST_ASSERT(gCurrentAircraftName == "SF50.acf");
+        TEST_ASSERT(gCurrentAircraftSettings.enableDifferentialBraking == true);
+        TEST_ASSERT(gCurrentAircraftSettings.enableBrakingEnhancements == true);
+
+        // 4. Reload Cirrus_SR22.acf - should restore disabled differential braking setting
+        g_mockAircraftFileName = "Cirrus_SR22.acf";
+        g_mockAircraftPath = "/path/to/Cirrus_SR22.acf";
+        XPluginReceiveMessage(0, XPLM_MSG_PLANE_LOADED, reinterpret_cast<void*>(0));
+        TEST_ASSERT(gCurrentAircraftName == "Cirrus_SR22.acf");
+        TEST_ASSERT(gCurrentAircraftSettings.enableDifferentialBraking == false);
+        TEST_ASSERT(gCurrentAircraftSettings.enableBrakingEnhancements == true);
+
+        std::remove(testSettingsPath.c_str());
+        printf("  [PASS] Aircraft loading lifecycle with per-aircraft settings loading\n");
+    }
+
+    // Test 17: Differential Braking Toggle via Settings
+    {
+        ResetMockValues();
+        g_mockFloatDataRefs["sim/aircraft/gear/acf_nw_steerdeg1"] = 0.0f;
+        g_mockFloatDataRefs["sim/aircraft/gear/acf_nw_steerdeg2"] = 0.0f;
+        g_mockIntDataRefs["sim/flightmodel/failures/onground_any"] = 1;
+        g_mockFloatDataRefs["sim/flightmodel/position/groundspeed"] = 3.0f; // on ground slow
+        g_mockFloatDataRefs["sim/joystick/yoke_heading_ratio"] = 1.0f; // full right rudder
+        g_mockFloatDataRefs["sim/flightmodel/controls/rudder_ratio"] = 1.0f;
+
+        // When differential braking is DISABLED
+        gCurrentAircraftSettings.enableDifferentialBraking = false;
+        SetSimSteeringOverrides(false);
+        g_registeredFlightLoopCallback(0.02f, 0.02f, 70, nullptr);
+
+        TEST_ASSERT(g_mockFloatDataRefs["sim/flightmodel/controls/r_brake_add"] == 0.0f);
+        TEST_ASSERT(g_mockFloatDataRefs["sim/flightmodel/controls/l_brake_add"] == 0.0f);
+        TEST_ASSERT(g_mockFloatDataRefs["sim/flightmodel/controls/rudder_ratio"] == 1.0f); // rudder not zeroed
+
+        // When differential braking is ENABLED
+        gCurrentAircraftSettings.enableDifferentialBraking = true;
+        SetSimSteeringOverrides(true);
+        g_registeredFlightLoopCallback(0.02f, 0.02f, 71, nullptr);
+
+        TEST_ASSERT(g_mockFloatDataRefs["sim/flightmodel/controls/r_brake_add"] == kMaxBrakeForce);
+        TEST_ASSERT(g_mockFloatDataRefs["sim/flightmodel/controls/l_brake_add"] == 0.0f);
+        TEST_ASSERT(g_mockFloatDataRefs["sim/flightmodel/controls/rudder_ratio"] == 0.0f); // rudder zeroed
+        printf("  [PASS] Enable/Disable Differential Braking setting behavior\n");
+    }
+
+    // Test 18: Braking Enhancements Toggle via Settings
+    {
+        ResetMockValues();
+        g_mockIntDataRefs["sim/flightmodel/failures/onground_any"] = 1;
+        g_mockFloatDataRefs["sim/flightmodel/position/groundspeed"] = 10.0f;
+
+        // Radii and tires for skid test
+        std::vector<float> radii = {0.0f, 0.3f, 0.3f, 0.0f};
+        g_mockFloatArrayDataRefs["sim/aircraft/parts/acf_gear_radi"] = radii;
+        std::vector<float> tiresOneSkid = {0.0f, 0.0f, 33.3333f, 0.0f};
+        g_mockFloatArrayDataRefs["sim/flightmodel/parts/tire_rot_speed_rad_sec"] = tiresOneSkid;
+
+        // Scenario 1: Braking enhancements DISABLED
+        gCurrentAircraftSettings.enableBrakingEnhancements = false;
+        ProgressiveBrakeCmdHandler(gProgressiveBrakeCmd, xplm_CommandBegin, nullptr);
+        TEST_ASSERT(gTargetProgressiveBrake == 0.0f);
+
+        g_registeredFlightLoopCallback(0.02f, 0.02f, 80, nullptr);
+        TEST_ASSERT(gCurrentProgressiveBrake == 0.0f);
+        TEST_ASSERT(gAbsReleaseTimerLeft == 0.0f);
+        TEST_ASSERT(gAbsReleaseTimerRight == 0.0f);
+
+        // Scenario 2: Braking enhancements ENABLED
+        gCurrentAircraftSettings.enableBrakingEnhancements = true;
+        ProgressiveBrakeCmdHandler(gProgressiveBrakeCmd, xplm_CommandBegin, nullptr);
+        TEST_ASSERT(gTargetProgressiveBrake == 1.0f);
+
+        g_registeredFlightLoopCallback(0.02f, 0.02f, 81, nullptr);
+        TEST_ASSERT(gCurrentProgressiveBrake > 0.0f);
+        TEST_ASSERT(gAbsReleaseTimerLeft > 0.0f); // ABS skid pulsed
+        printf("  [PASS] Enable/Disable Braking Enhancements (Progressive + ABS) setting behavior\n");
+    }
+
+    // Test 19: SettingsUI Integration
+    {
+        TEST_ASSERT(SettingsUI::GetWindow() != nullptr);
+        TEST_ASSERT(XPLMGetWindowIsVisible(SettingsUI::GetWindow()) == 0);
+
+        SettingsUI::Show();
+        TEST_ASSERT(SettingsUI::IsVisible());
+
+        SettingsUI::Toggle();
+        TEST_ASSERT(!SettingsUI::IsVisible());
+
+        SettingsUI::Toggle();
+        TEST_ASSERT(SettingsUI::IsVisible());
+
+        SettingsUI::Hide();
+        TEST_ASSERT(!SettingsUI::IsVisible());
+        printf("  [PASS] SettingsUI Window creation and Show/Hide/Toggle\n");
+    }
+
+    // Test 20: Fallback to "sim/flight_controls/brakes_regular" when braking enhancements are disabled
+    {
+        ResetMockValues();
+
+        // Part A: Enhanced braking is ENABLED
+        gCurrentAircraftSettings.enableBrakingEnhancements = true;
+        ProgressiveBrakeCmdHandler(gProgressiveBrakeCmd, xplm_CommandBegin, nullptr);
+        TEST_ASSERT(gTargetProgressiveBrake == 1.0f);
+        TEST_ASSERT(g_mockCommands["sim/flight_controls/brakes_regular"].beginCount == 0);
+        TEST_ASSERT(g_mockCommands["sim/flight_controls/brakes_regular"].isActive == false);
+        TEST_ASSERT(gIsHoldingRegularBrakes == false);
+
+        ProgressiveBrakeCmdHandler(gProgressiveBrakeCmd, xplm_CommandEnd, nullptr);
+        TEST_ASSERT(gTargetProgressiveBrake == 0.0f);
+        TEST_ASSERT(g_mockCommands["sim/flight_controls/brakes_regular"].endCount == 0);
+
+        // Part B: Enhanced braking is DISABLED -> Should issue "Hold brakes regular"
+        gCurrentAircraftSettings.enableBrakingEnhancements = false;
+        ProgressiveBrakeCmdHandler(gProgressiveBrakeCmd, xplm_CommandBegin, nullptr);
+        TEST_ASSERT(gTargetProgressiveBrake == 0.0f);
+        TEST_ASSERT(g_mockCommands["sim/flight_controls/brakes_regular"].beginCount == 1);
+        TEST_ASSERT(g_mockCommands["sim/flight_controls/brakes_regular"].isActive == true);
+        TEST_ASSERT(gIsHoldingRegularBrakes == true);
+
+        // Command continue should not begin repeatedly
+        ProgressiveBrakeCmdHandler(gProgressiveBrakeCmd, xplm_CommandContinue, nullptr);
+        TEST_ASSERT(g_mockCommands["sim/flight_controls/brakes_regular"].beginCount == 1);
+        TEST_ASSERT(g_mockCommands["sim/flight_controls/brakes_regular"].isActive == true);
+
+        // Command end releases regular brakes
+        ProgressiveBrakeCmdHandler(gProgressiveBrakeCmd, xplm_CommandEnd, nullptr);
+        TEST_ASSERT(g_mockCommands["sim/flight_controls/brakes_regular"].endCount == 1);
+        TEST_ASSERT(g_mockCommands["sim/flight_controls/brakes_regular"].isActive == false);
+        TEST_ASSERT(gIsHoldingRegularBrakes == false);
+
+        // Part C: User toggles braking enhancements ON while holding regular brakes
+        gCurrentAircraftSettings.enableBrakingEnhancements = false;
+        ProgressiveBrakeCmdHandler(gProgressiveBrakeCmd, xplm_CommandBegin, nullptr);
+        TEST_ASSERT(g_mockCommands["sim/flight_controls/brakes_regular"].beginCount == 2);
+        TEST_ASSERT(gIsHoldingRegularBrakes == true);
+
+        // Settings toggled on
+        AircraftSettings newSettings{true, true};
+        SettingsUI::GetOnSettingsChangedCallback()("Generic.acf", newSettings);
+        TEST_ASSERT(g_mockCommands["sim/flight_controls/brakes_regular"].endCount == 2);
+        TEST_ASSERT(g_mockCommands["sim/flight_controls/brakes_regular"].isActive == false);
+        TEST_ASSERT(gIsHoldingRegularBrakes == false);
+
+        // Part D: ReleaseDifferentialBraking releases regular brakes if held
+        gCurrentAircraftSettings.enableBrakingEnhancements = false;
+        ProgressiveBrakeCmdHandler(gProgressiveBrakeCmd, xplm_CommandBegin, nullptr);
+        TEST_ASSERT(g_mockCommands["sim/flight_controls/brakes_regular"].beginCount == 3);
+        TEST_ASSERT(gIsHoldingRegularBrakes == true);
+
+        ReleaseDifferentialBraking();
+        TEST_ASSERT(g_mockCommands["sim/flight_controls/brakes_regular"].endCount == 3);
+        TEST_ASSERT(g_mockCommands["sim/flight_controls/brakes_regular"].isActive == false);
+        TEST_ASSERT(gIsHoldingRegularBrakes == false);
+
+        printf("  [PASS] Fallback to hold brakes regular command when enhanced braking disabled\n");
     }
 
     XPluginStop();

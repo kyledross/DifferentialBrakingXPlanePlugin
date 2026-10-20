@@ -8,6 +8,7 @@ RUN apt-get update \
         build-essential \
         cmake \
         ca-certificates \
+        libgl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace

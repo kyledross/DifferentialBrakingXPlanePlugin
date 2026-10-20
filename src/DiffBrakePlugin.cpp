@@ -1,19 +1,21 @@
 /*
-*   Copyright 2026 Kyle D. Ross
+ * Copyright 2026 Kyle D. Ross
  *
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- *       http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
+#include "SettingsManager.h"
+#include "SettingsUI.h"
 #include "XPLMDataAccess.h"
 #include "XPLMPlanes.h"
 #include "XPLMPlugin.h"
@@ -24,6 +26,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <string>
 
@@ -141,6 +144,14 @@ namespace
     // Custom command handle for progressive braking with ABS.
     XPLMCommandRef gProgressiveBrakeCmd = nullptr;
 
+    // Handle to X-Plane's native "Hold brakes regular" command.
+    XPLMCommandRef gHoldBrakesRegularCmd = nullptr;
+    bool gIsHoldingRegularBrakes = false;
+
+    // Settings state
+    SettingsManager gSettingsManager;
+    AircraftSettings gCurrentAircraftSettings;
+    std::string gCurrentAircraftName;
 
     void LogMessage(const std::string& message)
     {
@@ -163,13 +174,6 @@ namespace
         }
         if (gGearOnGroundDataRef == nullptr)
         {
-            // "sim/flightmodel2/gear/on_ground_act" is a per-gear array, and
-            // reading only index 0 is not reliable across aircraft (index 0
-            // is not guaranteed to be the nose gear, and can briefly read
-            // false while the aircraft/gear model finishes initializing).
-            // "sim/flightmodel/failures/onground_any" is a single boolean
-            // dataref that is true whenever any part of the aircraft is
-            // touching the ground, which is what we actually want here.
             gGearOnGroundDataRef = XPLMFindDataRef("sim/flightmodel/failures/onground_any");
         }
         if (gGroundSpeedDataRef == nullptr)
@@ -178,7 +182,6 @@ namespace
         }
         if (gThrottleDataRef == nullptr)
         {
-            // Used as a fallback when groundspeed is unavailable.
             gThrottleDataRef = XPLMFindDataRef("sim/cockpit2/engine/actuators/throttle_ratio_all");
         }
         if (gYawInputDataRef == nullptr)
@@ -195,18 +198,10 @@ namespace
         }
         if (gRudderRatioDataRef == nullptr)
         {
-            // Written to zero while differential braking is active so that
-            // rudder pedal input steers only via the brakes, not also via
-            // the aerodynamic rudder surface (which would otherwise cause
-            // dual-steering).
             gRudderRatioDataRef = XPLMFindDataRef("sim/flightmodel/controls/rudder_ratio");
         }
         if (gOverrideGearBrakeDataRef == nullptr)
         {
-            // Set to 1 for every aircraft while the plugin is enabled. X-Plane's
-            // auto-toe-brake helper can apply abrupt braking at steering extremes;
-            // bypassing it leaves castering differential braking to this plugin and
-            // normal braking to the simulator.
             gOverrideGearBrakeDataRef = XPLMFindDataRef("sim/operation/override/override_gearbrake");
         }
         if (gLeftBrakeRatioDataRef == nullptr)
@@ -237,6 +232,10 @@ namespace
                 gGearRadiiDataRef = XPLMFindDataRef("sim/aircraft/parts/acf_gear_radi");
             }
         }
+        if (gHoldBrakesRegularCmd == nullptr)
+        {
+            gHoldBrakesRegularCmd = XPLMFindCommand("sim/flight_controls/brakes_regular");
+        }
     }
 
     // Inspects an .acf aircraft file to determine if any landing gear is configured
@@ -257,8 +256,6 @@ namespace
         std::string line;
         while (std::getline(acfFile, line))
         {
-            // Match gear castor property, e.g.:
-            // "P _gear/0/_gear_castors 1"
             if (line.rfind("P _gear/", 0) == 0 && line.find("_gear_castors") != std::string::npos)
             {
                 const auto lastSpace = line.find_last_of(" \t");
@@ -294,8 +291,6 @@ namespace
             return true;
         }
 
-        // If path was an object/relative file and did not directly open as an .acf file,
-        // try looking up the .acf in the same directory using fileName if available.
         std::string pathStr(path);
         if (!pathStr.empty() && !pathStr.ends_with(".acf"))
         {
@@ -312,7 +307,6 @@ namespace
         }
 
         // 2. Query the nosewheel steering deflection limits.
-        // Aircraft with no mechanical steering linkage have 0 degrees deflection defined in Plane-Maker.
         if (gSteerDeg1DataRef != nullptr && gSteerDeg2DataRef != nullptr)
         {
             const float steer1 = XPLMGetDataf(gSteerDeg1DataRef);
@@ -325,20 +319,7 @@ namespace
         return false;
     }
 
-    // Enables or disables X-Plane's native auto-toe-brake helper logic for
-    // every aircraft while the plugin is enabled.
-    //
-    // NOTE: we deliberately do NOT also set
-    // sim/operation/override/override_wheel_steer here. Per X-Plane's own
-    // DataRefs.txt, that override only lets a plugin drive
-    // sim/flightmodel2/gear/tire_steer_command_deg directly - it does NOT
-    // make the nosewheel free-caster on its own. Since this plugin never
-    // writes a steer command, enabling that override was actually freezing
-    // the nosewheel at whatever angle it last had instead of letting it
-    // free-caster, which caused binding/resistance (and the reported abrupt
-    // "stop") exactly when reversing rudder direction. Leaving
-    // override_wheel_steer alone lets X-Plane's normal free-castering
-    // nosewheel physics run.
+    // Enables or disables X-Plane's native auto-toe-brake helper logic.
     void SetSimSteeringOverrides(bool overrideEnabled)
     {
         if (gOverrideGearBrakeDataRef != nullptr)
@@ -346,6 +327,7 @@ namespace
             XPLMSetDatai(gOverrideGearBrakeDataRef, overrideEnabled ? 1 : 0);
         }
     }
+
     // Removes any additive brake force.
     void ReleaseDifferentialBraking()
     {
@@ -357,6 +339,15 @@ namespace
         gAbsReleaseTimerLeft = 0.0f;
         gAbsReleaseTimerRight = 0.0f;
 
+        if (gIsHoldingRegularBrakes)
+        {
+            if (gHoldBrakesRegularCmd != nullptr)
+            {
+                XPLMCommandEnd(gHoldBrakesRegularCmd);
+            }
+            gIsHoldingRegularBrakes = false;
+        }
+
         if (gLeftBrakeAddDataRef != nullptr)
         {
             XPLMSetDataf(gLeftBrakeAddDataRef, 0.0f);
@@ -367,11 +358,39 @@ namespace
         }
     }
 
-    // Evaluates the aircraft steering type, logs changes, and updates plugin state and overrides.
+    // Evaluates the aircraft steering type, inspects settings, logs changes, and updates plugin state.
     void UpdateAircraftSteeringType()
     {
         const bool wasCasteringAircraft = gIsCasteringAircraft;
         gIsCasteringAircraft = IsCasteringAircraftLoaded();
+
+        // Get aircraft model name
+        char fileName[256];
+        char path[512];
+        std::memset(fileName, 0, sizeof(fileName));
+        std::memset(path, 0, sizeof(path));
+        XPLMGetNthAircraftModel(0, fileName, path);
+
+        std::string acfName = fileName;
+        if (acfName.empty())
+        {
+            std::string pathStr(path);
+            const auto lastSlash = pathStr.find_last_of("/\\");
+            if (lastSlash != std::string::npos)
+            {
+                acfName = pathStr.substr(lastSlash + 1);
+            }
+        }
+        if (acfName.empty())
+        {
+            acfName = "Unknown.acf";
+        }
+
+        gCurrentAircraftName = acfName;
+
+        // Inspect settings: if not flown before, default both on and save. If flown, load them.
+        gCurrentAircraftSettings = gSettingsManager.GetOrInitAircraftSettings(gCurrentAircraftName);
+        SettingsUI::SetCurrentAircraft(gCurrentAircraftName, gCurrentAircraftSettings);
 
         if (gIsCasteringAircraft && (!wasCasteringAircraft || !gHasLoggedAircraftDetected))
         {
@@ -384,14 +403,11 @@ namespace
             gHasLoggedAircraftDetected = false;
         }
 
-        // Bypass X-Plane's auto-toe-brake helper on every aircraft because its
-        // braking at steering extremes causes an abrupt jerk.
-        SetSimSteeringOverrides(true);
+        // Apply steering overrides according to differential braking setting
+        SetSimSteeringOverrides(gCurrentAircraftSettings.enableDifferentialBraking);
 
-        if (!gIsCasteringAircraft)
+        if (!gIsCasteringAircraft || !gCurrentAircraftSettings.enableDifferentialBraking)
         {
-            // Reset state so we don't leave brakes engaged if the user
-            // switches to a different aircraft.
             gHasLoggedGroundState = false;
             ReleaseDifferentialBraking();
         }
@@ -424,38 +440,76 @@ namespace
         return curved * kMaxBrakeForce;
     }
 
-
     // Custom command handler for progressive braking with ABS.
     int ProgressiveBrakeCmdHandler(XPLMCommandRef /*inCommand*/,
                                    XPLMCommandPhase inPhase,
                                    void* /*inRefcon*/)
     {
-        if (inPhase == xplm_CommandBegin || inPhase == xplm_CommandContinue)
+        if (gCurrentAircraftSettings.enableBrakingEnhancements)
         {
-            gTargetProgressiveBrake = 1.0f;
+            if (gIsHoldingRegularBrakes)
+            {
+                if (gHoldBrakesRegularCmd != nullptr)
+                {
+                    XPLMCommandEnd(gHoldBrakesRegularCmd);
+                }
+                gIsHoldingRegularBrakes = false;
+            }
+
+            if (inPhase == xplm_CommandBegin || inPhase == xplm_CommandContinue)
+            {
+                gTargetProgressiveBrake = 1.0f;
+            }
+            else if (inPhase == xplm_CommandEnd)
+            {
+                gTargetProgressiveBrake = 0.0f;
+                gBrakeHoldDuration = 0.0f;
+            }
         }
-        else if (inPhase == xplm_CommandEnd)
+        else
         {
             gTargetProgressiveBrake = 0.0f;
             gBrakeHoldDuration = 0.0f;
+            gCurrentProgressiveBrake = 0.0f;
+
+            if (gHoldBrakesRegularCmd == nullptr)
+            {
+                gHoldBrakesRegularCmd = XPLMFindCommand("sim/flight_controls/brakes_regular");
+            }
+
+            if (gHoldBrakesRegularCmd != nullptr)
+            {
+                if (inPhase == xplm_CommandBegin)
+                {
+                    if (!gIsHoldingRegularBrakes)
+                    {
+                        XPLMCommandBegin(gHoldBrakesRegularCmd);
+                        gIsHoldingRegularBrakes = true;
+                    }
+                }
+                else if (inPhase == xplm_CommandEnd)
+                {
+                    if (gIsHoldingRegularBrakes)
+                    {
+                        XPLMCommandEnd(gHoldBrakesRegularCmd);
+                        gIsHoldingRegularBrakes = false;
+                    }
+                }
+            }
         }
         return 0;
     }
 
-    // The main flight loop callback. Runs every frame but does only cheap
-    // dataref reads/writes, so it should not cause any stutter.
+    // The main flight loop callback. Runs every frame.
     float FlightLoopCallback(float inElapsedSinceLastCall,
-                              float /*inElapsedTimeSinceLastFlightLoop*/,
-                              int /*inCounter*/,
-                              void* /*inRefcon*/)
+                             float /*inElapsedTimeSinceLastFlightLoop*/,
+                             int /*inCounter*/,
+                             void* /*inRefcon*/)
     {
         FindDataRefsIfNeeded();
 
         const bool onGround = IsOnGround();
 
-        // Prefer gating on groundspeed. If that dataref is unavailable for
-        // some reason, fall back to gating on throttle position instead, so
-        // we still avoid engaging differential braking during takeoff/flight.
         float groundSpeedMs = 0.0f;
         bool hasGroundSpeed = false;
         if (gGroundSpeedDataRef != nullptr)
@@ -479,7 +533,8 @@ namespace
             slowEnoughForBraking = false;
         }
 
-        const bool shouldUseDifferentialBraking = onGround && slowEnoughForBraking;
+        const bool shouldUseDifferentialBraking =
+            gCurrentAircraftSettings.enableDifferentialBraking && onGround && slowEnoughForBraking;
 
         // Log ground/air transitions once, as required by design.md.
         if (!gHasLoggedGroundState || onGround != gLastLoggedOnGround)
@@ -490,8 +545,7 @@ namespace
             gLastLoggedOnGround = onGround;
         }
 
-        // Log the switch into/out of differential braking mode once per
-        // transition.
+        // Log the switch into/out of differential braking mode once per transition.
         if (shouldUseDifferentialBraking != gIsDifferentialBrakingActive)
         {
             gIsDifferentialBrakingActive = shouldUseDifferentialBraking;
@@ -501,61 +555,65 @@ namespace
                            : "Differential braking is now INACTIVE.");
         }
 
-        // Step A: Update Progressive Brake Base Pressure
-        if (gTargetProgressiveBrake > 0.0f)
+        // Step A: Update Progressive Brake Base Pressure (Braking Enhancements)
+        if (gCurrentAircraftSettings.enableBrakingEnhancements)
         {
-            gBrakeHoldDuration += inElapsedSinceLastCall;
+            if (gTargetProgressiveBrake > 0.0f)
+            {
+                gBrakeHoldDuration += inElapsedSinceLastCall;
+            }
+            else
+            {
+                gBrakeHoldDuration = 0.0f;
+            }
+
+            float effectiveTarget = gTargetProgressiveBrake;
+            if (effectiveTarget > 0.0f && gBrakeHoldDuration < kStage1Duration)
+            {
+                effectiveTarget = std::min(effectiveTarget, kStage1BrakeCap);
+            }
+
+            if (gCurrentProgressiveBrake < effectiveTarget)
+            {
+                gCurrentProgressiveBrake += kProgressiveRampUpRate * inElapsedSinceLastCall;
+                if (gCurrentProgressiveBrake > effectiveTarget)
+                {
+                    gCurrentProgressiveBrake = effectiveTarget;
+                }
+                if (gCurrentProgressiveBrake > 1.0f)
+                {
+                    gCurrentProgressiveBrake = 1.0f;
+                }
+            }
+            else if (gCurrentProgressiveBrake > effectiveTarget)
+            {
+                gCurrentProgressiveBrake -= kProgressiveRampDownRate * inElapsedSinceLastCall;
+                if (gCurrentProgressiveBrake < effectiveTarget)
+                {
+                    gCurrentProgressiveBrake = effectiveTarget;
+                }
+                if (gCurrentProgressiveBrake < 0.0f)
+                {
+                    gCurrentProgressiveBrake = 0.0f;
+                }
+            }
         }
         else
         {
+            gTargetProgressiveBrake = 0.0f;
             gBrakeHoldDuration = 0.0f;
+            gCurrentProgressiveBrake = 0.0f;
         }
 
-        float effectiveTarget = gTargetProgressiveBrake;
-        if (effectiveTarget > 0.0f && gBrakeHoldDuration < kStage1Duration)
-        {
-            effectiveTarget = std::min(effectiveTarget, kStage1BrakeCap);
-        }
-
-        if (gCurrentProgressiveBrake < effectiveTarget)
-        {
-            gCurrentProgressiveBrake += kProgressiveRampUpRate * inElapsedSinceLastCall;
-            if (gCurrentProgressiveBrake > effectiveTarget)
-            {
-                gCurrentProgressiveBrake = effectiveTarget;
-            }
-            if (gCurrentProgressiveBrake > 1.0f)
-            {
-                gCurrentProgressiveBrake = 1.0f;
-            }
-        }
-        else if (gCurrentProgressiveBrake > effectiveTarget)
-        {
-            gCurrentProgressiveBrake -= kProgressiveRampDownRate * inElapsedSinceLastCall;
-            if (gCurrentProgressiveBrake < effectiveTarget)
-            {
-                gCurrentProgressiveBrake = effectiveTarget;
-            }
-            if (gCurrentProgressiveBrake < 0.0f)
-            {
-                gCurrentProgressiveBrake = 0.0f;
-            }
-        }
-
-        // Step B: Calculate Existing Differential Braking
+        // Step B: Calculate Differential Braking
         float diffBrakeLeft = 0.0f;
         float diffBrakeRight = 0.0f;
-        if (gIsCasteringAircraft && gIsDifferentialBrakingActive)
+        if (gIsCasteringAircraft && gIsDifferentialBrakingActive && gCurrentAircraftSettings.enableDifferentialBraking)
         {
             const float yawInput = gYawInputDataRef != nullptr
                                         ? XPLMGetDataf(gYawInputDataRef)
                                         : 0.0f;
 
-            // yawInput is in the range [-1, 1]. Negative == left twist/pedal,
-            // positive == right. Map the magnitude through the deadzone/curve
-            // above onto a single signed brake balance (negative == left brake,
-            // positive == right brake) so the two sides can never both be
-            // non-zero at the same time.
             float targetBrakeBalance = 0.0f;
             if (yawInput < 0.0f)
             {
@@ -569,8 +627,6 @@ namespace
             diffBrakeLeft = targetBrakeBalance < 0.0f ? -targetBrakeBalance : 0.0f;
             diffBrakeRight = targetBrakeBalance > 0.0f ? targetBrakeBalance : 0.0f;
 
-            // Suppress aerodynamic rudder surface while differential braking
-            // is active so rudder pedal input only steers via differential braking.
             if (gRudderRatioDataRef != nullptr)
             {
                 XPLMSetDataf(gRudderRatioDataRef, 0.0f);
@@ -578,15 +634,16 @@ namespace
         }
 
         // Step C: Merge Forces
-        float combinedLeft = std::min(1.0f, diffBrakeLeft + gCurrentProgressiveBrake);
-        float combinedRight = std::min(1.0f, diffBrakeRight + gCurrentProgressiveBrake);
+        float combinedLeft = diffBrakeLeft + gCurrentProgressiveBrake;
+        float combinedRight = diffBrakeRight + gCurrentProgressiveBrake;
+        combinedLeft = std::min(combinedLeft, 1.0f);
+        combinedRight = std::min(combinedRight, 1.0f);
 
-        // Step D: Universal ABS Logic
-        const float groundspeed = hasGroundSpeed
-                                      ? groundSpeedMs
-                                      : (gGroundSpeedDataRef != nullptr ? XPLMGetDataf(gGroundSpeedDataRef) : 0.0f);
-
-        if (groundspeed > kMinAbsGroundspeedMs && (combinedLeft > 0.0f || combinedRight > 0.0f) &&
+        // Step D: Anti-Skid (ABS) Monitoring (Braking Enhancements)
+        const float groundspeed = hasGroundSpeed ? groundSpeedMs : 0.0f;
+        if (gCurrentAircraftSettings.enableBrakingEnhancements &&
+            groundspeed > kMinAbsGroundspeedMs &&
+            (combinedLeft > 0.0f || combinedRight > 0.0f) &&
             gTireRotSpeedDataRef != nullptr && gGearRadiiDataRef != nullptr)
         {
             float tireRotSpeed[8] = {0.0f};
@@ -656,14 +713,6 @@ namespace
             XPLMSetDataf(gRightBrakeAddDataRef, combinedRight);
         }
 
-        // Debug-level trace of the forces applied, useful for tuning, and
-        // including the actual net brake ratio X-Plane reports it is using
-        // on each wheel. If those values are noticeably higher than what we
-        // requested above, that is evidence the sim's native auto-toe-brake
-        // logic is still contributing braking on top of ours.
-        // Only log when braking is actually being applied and
-        // throttled to once per quarter second (when debug logging is enabled).
-        // ReSharper disable once CppIfCanBeReplacedByConstexprIf
         if (kEnableDiffBrakingLog && (combinedLeft > 0.0f || combinedRight > 0.0f))
         {
             gTimeSinceLastDiffBrakeLog += inElapsedSinceLastCall;
@@ -699,6 +748,49 @@ PLUGIN_API int XPluginStart(char* outName, char* outSig, char* outDesc)
     std::strcpy(outSig, "com.kyleross.diffbrakeplugin");
     std::strcpy(outDesc, "Provides smooth differential braking via rudder control.");
 
+    // Resolve plugin path and initialize settings
+    char outFilePath[512] = {0};
+    XPLMGetPluginInfo(XPLMGetMyID(), nullptr, outFilePath, nullptr, nullptr);
+    std::string settingsPath = SettingsManager::ResolveDefaultSettingsPath(outFilePath);
+    gSettingsManager.SetSettingsFilePath(settingsPath);
+    gSettingsManager.Load();
+
+    // Initialize Dear ImGui UI & Menu
+    SettingsUI::Initialize();
+    SettingsUI::SetOnSettingsChangedCallback([](const std::string& acfName, const AircraftSettings& settings) {
+        gCurrentAircraftSettings = settings;
+        gSettingsManager.SetAircraftSettings(acfName, settings);
+        gSettingsManager.Save();
+
+        SetSimSteeringOverrides(gCurrentAircraftSettings.enableDifferentialBraking);
+
+        if (!gCurrentAircraftSettings.enableDifferentialBraking)
+        {
+            if (gLeftBrakeAddDataRef != nullptr) XPLMSetDataf(gLeftBrakeAddDataRef, 0.0f);
+            if (gRightBrakeAddDataRef != nullptr) XPLMSetDataf(gRightBrakeAddDataRef, 0.0f);
+        }
+
+        if (gCurrentAircraftSettings.enableBrakingEnhancements)
+        {
+            if (gIsHoldingRegularBrakes)
+            {
+                if (gHoldBrakesRegularCmd != nullptr)
+                {
+                    XPLMCommandEnd(gHoldBrakesRegularCmd);
+                }
+                gIsHoldingRegularBrakes = false;
+            }
+        }
+        else
+        {
+            gTargetProgressiveBrake = 0.0f;
+            gBrakeHoldDuration = 0.0f;
+            gCurrentProgressiveBrake = 0.0f;
+            gAbsReleaseTimerLeft = 0.0f;
+            gAbsReleaseTimerRight = 0.0f;
+        }
+    });
+
     gProgressiveBrakeCmd = XPLMCreateCommand("diffbrakeplugin/braking/hold_brakes_progressive_abs",
                                              "Hold Brakes (Progressive with ABS)");
     if (gProgressiveBrakeCmd != nullptr)
@@ -713,6 +805,8 @@ PLUGIN_API int XPluginStart(char* outName, char* outSig, char* outDesc)
 
 PLUGIN_API void XPluginStop()
 {
+    SettingsUI::Cleanup();
+
     if (gProgressiveBrakeCmd != nullptr)
     {
         XPLMUnregisterCommandHandler(gProgressiveBrakeCmd, ProgressiveBrakeCmdHandler, 1, nullptr);
@@ -727,19 +821,13 @@ PLUGIN_API void XPluginStop()
 PLUGIN_API int XPluginEnable()
 {
     FindDataRefsIfNeeded();
-
-    // The aircraft is typically already loaded by the time our plugin is
-    // enabled, so check right away rather than waiting for a
-    // "plane loaded" message that may never arrive for the initial aircraft.
     UpdateAircraftSteeringType();
-
     return 1;
 }
 
 PLUGIN_API void XPluginDisable()
 {
-    // Return control to X-Plane and remove any additive braking applied
-    // during the last flight loop.
+    SettingsUI::Hide();
     SetSimSteeringOverrides(false);
     ReleaseDifferentialBraking();
     gIsCasteringAircraft = false;
@@ -751,8 +839,6 @@ PLUGIN_API void XPluginReceiveMessage(XPLMPluginID /*inFromWho*/, int inMessage,
 {
     if (inMessage == XPLM_MSG_PLANE_LOADED)
     {
-        // inParam contains the index number of the plane being loaded;
-        // 0 (XPLM_USER_AIRCRAFT) indicates the user's plane.
         if (reinterpret_cast<intptr_t>(inParam) == XPLM_USER_AIRCRAFT)
         {
             UpdateAircraftSteeringType();

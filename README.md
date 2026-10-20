@@ -139,12 +139,24 @@ Pilots can bind this command to a joystick button, throttle paddle, or keyboard 
 - **Stage 1 (Controlled Taxi Deceleration):** Holding the command smoothly ramps brake pressure up at 0.10 units/second, capped at 50% force (`0.50`) for the first 10.0 seconds (reaching 50% across 5.0 seconds and holding for another 5.0 seconds). This allows smooth, controlled deceleration during taxiing without jarring stops or excessive tire wear.
 - **Stage 2 (Full Stopping Power):** Continuing to hold the command past 10.0 seconds automatically transitions to Stage 2, ramping pressure up to 100% force (`1.0`) across 5.0 seconds for maximum deceleration during short-field landings or emergency stops.
 - **Smooth Release:** Releasing the command ramps pressure back down at 0.50 units/second to prevent abrupt weight transfer and nose bounce.
+- **Fallback Mode:** If braking enhancements are disabled in the settings dialog, triggering this command automatically forwards directly to X-Plane's native "Hold brakes regular" command (`sim/flight_controls/brakes_regular`) so braking operates normally without progressive/ABS enhancements.
 
 ### 3. Universal Anti-Skid / Anti-Lock Braking System (ABS)
 Active across all aircraft when groundspeed exceeds 5.0 m/s (~9.7 knots):
 - Continuously monitors left and right main gear rotational velocities against true aircraft groundspeed.
 - If a wheel enters a skid (wheel slip ratio drops below 0.40, meaning the wheel's linear speed is under 40% of groundspeed), brake pressure to that specific wheel is immediately pulsed off for 0.1 seconds (100 ms) to restore wheel spin.
 - Prevents tire skidding, blowouts, and loss of directional stability during high-speed rollout braking.
+
+### 4. Per-Aircraft Settings & Dear ImGui UI
+Settings are segregated per aircraft and saved automatically in a `settings.json` file alongside the plugin:
+- When a new aircraft is loaded, default settings are applied (differential braking enabled, braking enhancements enabled) and saved.
+- Flown aircraft settings persist across simulator sessions.
+- Open the settings dialog via the X-Plane menu (**Plugins > DiffBrakePlugin > Settings...**).
+- The Dear ImGui dialog displays the active aircraft name and allows toggling:
+  - **Enable differential braking**
+  - **Enable braking enhancements**
+- Changes update the settings file in real-time and apply immediately to the simulation.
+- Close the dialog via the title bar or the **OK** button in the lower-right corner.
 
 ## How it works
 
