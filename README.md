@@ -14,8 +14,8 @@ system with integrated Anti-Skid (ABS) protection across aircraft to ensure smoo
 maximum stopping efficiency, and prevention of tire lockup.
 
 The behavior of the plugin is set with various constants regarding maximum brake force,
-ramp rates, ABS thresholds, and so-on. The defaults are tuned for optimal handling and stability,
-so no in-sim UI is required.
+ramp rates, ABS thresholds, and so-on.  You may adapt and build this software to suit
+your needs.
 
 If this software enhances your experience, please consider supporting the project:  
 https://buymeacoffee.com/kyledross
