@@ -191,6 +191,9 @@ int XPLMAppendMenuItem(XPLMMenuID /*inMenu*/, const char* /*inItemName*/, void* 
     return nextItem++;
 }
 
+void XPLMAppendMenuSeparator(XPLMMenuID /*inMenu*/) {
+}
+
 void XPLMSetGraphicsState(int /*inEnableFog*/, int /*inNumberTexUnits*/, int /*inEnableLighting*/, int /*inEnableAlphaTesting*/, int /*inEnableAlphaBlending*/, int /*inEnableDepthTesting*/, int /*inEnableDepthWriting*/) {
 }
 
@@ -1057,6 +1060,33 @@ int main() {
         TEST_ASSERT(gIsHoldingRegularBrakes == false);
 
         printf("  [PASS] Fallback to hold brakes regular command when enhanced braking disabled\n");
+    }
+
+    // Test 21: AboutUI Integration & Menu Trigger
+    {
+        TEST_ASSERT(AboutUI::GetWindow() != nullptr);
+        TEST_ASSERT(XPLMGetWindowIsVisible(AboutUI::GetWindow()) == 0);
+
+        AboutUI::Show();
+        TEST_ASSERT(AboutUI::IsVisible());
+
+        AboutUI::Toggle();
+        TEST_ASSERT(!AboutUI::IsVisible());
+
+        AboutUI::Toggle();
+        TEST_ASSERT(AboutUI::IsVisible());
+
+        AboutUI::Hide();
+        TEST_ASSERT(!AboutUI::IsVisible());
+
+        // Test Menu Trigger (item 2 in menu handler)
+        TEST_ASSERT(g_mockMenuHandler != nullptr);
+        g_mockMenuHandler(nullptr, reinterpret_cast<void*>(2));
+        TEST_ASSERT(AboutUI::IsVisible());
+        g_mockMenuHandler(nullptr, reinterpret_cast<void*>(2));
+        TEST_ASSERT(!AboutUI::IsVisible());
+
+        printf("  [PASS] AboutUI Window creation, Show/Hide/Toggle, and Menu Trigger\n");
     }
 
     XPluginStop();

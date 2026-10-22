@@ -18,6 +18,7 @@ set(IMGUI_SOURCES
 )
 
 set(PLUGIN_SOURCES
+    src/AboutUI.cpp
     src/DiffBrakePlugin.cpp
     src/SettingsManager.cpp
     src/SettingsUI.cpp
@@ -70,6 +71,7 @@ endif ()
 enable_testing()
 add_executable(test_castering_detection
         tests/test_castering_detection.cpp
+        src/AboutUI.cpp
         src/SettingsManager.cpp
         src/SettingsUI.cpp
         ${IMGUI_SOURCES})

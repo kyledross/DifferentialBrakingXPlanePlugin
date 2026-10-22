@@ -15,6 +15,7 @@
  */
 
 #include "SettingsUI.h"
+#include "AboutUI.h"
 #include "imgui/imgui.h"
 #include "imgui/imgui_impl_opengl3.h"
 #include "XPLMDisplay.h"
@@ -43,6 +44,7 @@ namespace SettingsUI
         XPLMWindowID gWindow = nullptr;
         XPLMMenuID gMenu = nullptr;
         int gMenuItemIndex = -1;
+        ImGuiContext* gImGuiContext = nullptr;
 
         std::string gCurrentAircraftName;
         AircraftSettings gCurrentSettings;
@@ -83,6 +85,11 @@ namespace SettingsUI
             glGetIntegerv(GL_VIEWPORT, lastViewport);
             float scaleX = (screenWidth > 0 && lastViewport[2] > 0) ? (static_cast<float>(lastViewport[2]) / static_cast<float>(screenWidth)) : 1.0f;
             float scaleY = (screenHeight > 0 && lastViewport[3] > 0) ? (static_cast<float>(lastViewport[3]) / static_cast<float>(screenHeight)) : 1.0f;
+
+            if (gImGuiContext != nullptr)
+            {
+                ImGui::SetCurrentContext(gImGuiContext);
+            }
 
             if (!gBackendInitialized)
             {
@@ -190,6 +197,11 @@ namespace SettingsUI
 
         int HandleMouseClickCallback(XPLMWindowID /*inWindowID*/, int x, int y, XPLMMouseStatus inMouse, void* /*inRefcon*/)
         {
+            if (gImGuiContext != nullptr)
+            {
+                ImGui::SetCurrentContext(gImGuiContext);
+            }
+
             int screenLeft = 0, screenTop = 0, screenRight = 0, screenBottom = 0;
             XPLMGetScreenBoundsGlobal(&screenLeft, &screenTop, &screenRight, &screenBottom);
 
@@ -210,6 +222,11 @@ namespace SettingsUI
 
         int HandleRightClickCallback(XPLMWindowID /*inWindowID*/, int x, int y, XPLMMouseStatus inMouse, void* /*inRefcon*/)
         {
+            if (gImGuiContext != nullptr)
+            {
+                ImGui::SetCurrentContext(gImGuiContext);
+            }
+
             int screenLeft = 0, screenTop = 0, screenRight = 0, screenBottom = 0;
             XPLMGetScreenBoundsGlobal(&screenLeft, &screenTop, &screenRight, &screenBottom);
 
@@ -230,6 +247,11 @@ namespace SettingsUI
 
         XPLMCursorStatus HandleCursorCallback(XPLMWindowID /*inWindowID*/, int x, int y, void* /*inRefcon*/)
         {
+            if (gImGuiContext != nullptr)
+            {
+                ImGui::SetCurrentContext(gImGuiContext);
+            }
+
             int screenLeft = 0, screenTop = 0, screenRight = 0, screenBottom = 0;
             XPLMGetScreenBoundsGlobal(&screenLeft, &screenTop, &screenRight, &screenBottom);
 
@@ -240,6 +262,11 @@ namespace SettingsUI
 
         int HandleMouseWheelCallback(XPLMWindowID /*inWindowID*/, int x, int y, int /*wheel*/, int clicks, void* /*inRefcon*/)
         {
+            if (gImGuiContext != nullptr)
+            {
+                ImGui::SetCurrentContext(gImGuiContext);
+            }
+
             int screenLeft = 0, screenTop = 0, screenRight = 0, screenBottom = 0;
             XPLMGetScreenBoundsGlobal(&screenLeft, &screenTop, &screenRight, &screenBottom);
 
@@ -255,9 +282,14 @@ namespace SettingsUI
 
         void MenuHandler(void* /*inMenuRef*/, void* inItemRef)
         {
-            if (reinterpret_cast<intptr_t>(inItemRef) == 1)
+            intptr_t item = reinterpret_cast<intptr_t>(inItemRef);
+            if (item == 1)
             {
                 Toggle();
+            }
+            else if (item == 2)
+            {
+                AboutUI::Toggle();
             }
         }
     } // namespace
@@ -270,7 +302,8 @@ namespace SettingsUI
         }
 
         IMGUI_CHECKVERSION();
-        ImGui::CreateContext();
+        gImGuiContext = ImGui::CreateContext();
+        ImGui::SetCurrentContext(gImGuiContext);
         ImGui::StyleColorsDark();
 
         ImGuiStyle& style = ImGui::GetStyle();
@@ -320,15 +353,16 @@ namespace SettingsUI
             gWindow = nullptr;
         }
 
-        if (gBackendInitialized)
+        if (gImGuiContext != nullptr)
         {
-            ImGui_ImplOpenGL3_Shutdown();
-            gBackendInitialized = false;
-        }
-
-        if (ImGui::GetCurrentContext() != nullptr)
-        {
-            ImGui::DestroyContext();
+            ImGui::SetCurrentContext(gImGuiContext);
+            if (gBackendInitialized)
+            {
+                ImGui_ImplOpenGL3_Shutdown();
+                gBackendInitialized = false;
+            }
+            ImGui::DestroyContext(gImGuiContext);
+            gImGuiContext = nullptr;
         }
 
         gInitialized = false;
@@ -354,6 +388,8 @@ namespace SettingsUI
             if (gMenu != nullptr)
             {
                 XPLMAppendMenuItem(gMenu, "Settings...", reinterpret_cast<void*>(1), 1);
+                XPLMAppendMenuSeparator(gMenu);
+                XPLMAppendMenuItem(gMenu, "About...", reinterpret_cast<void*>(2), 1);
             }
         }
     }

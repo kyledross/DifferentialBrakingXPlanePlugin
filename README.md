@@ -159,6 +159,7 @@ Settings are segregated per aircraft and saved automatically in a `settings.json
   - **Enable braking enhancements**
 - Changes update the settings file in real-time and apply immediately to the simulation.
 - Close the dialog via the title bar or the **OK** button in the lower-right corner.
+- View plugin information, licensing, third-party notices, and donation links via (**Plugins > DiffBrakePlugin > About...**).
 
 ## How it works
 

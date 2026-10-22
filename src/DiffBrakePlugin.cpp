@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "AboutUI.h"
 #include "SettingsManager.h"
 #include "SettingsUI.h"
 #include "XPLMDataAccess.h"
@@ -757,6 +758,7 @@ PLUGIN_API int XPluginStart(char* outName, char* outSig, char* outDesc)
 
     // Initialize Dear ImGui UI & Menu
     SettingsUI::Initialize();
+    AboutUI::Initialize();
     SettingsUI::SetOnSettingsChangedCallback([](const std::string& acfName, const AircraftSettings& settings) {
         gCurrentAircraftSettings = settings;
         gSettingsManager.SetAircraftSettings(acfName, settings);
@@ -805,6 +807,7 @@ PLUGIN_API int XPluginStart(char* outName, char* outSig, char* outDesc)
 
 PLUGIN_API void XPluginStop()
 {
+    AboutUI::Cleanup();
     SettingsUI::Cleanup();
 
     if (gProgressiveBrakeCmd != nullptr)
@@ -827,6 +830,7 @@ PLUGIN_API int XPluginEnable()
 
 PLUGIN_API void XPluginDisable()
 {
+    AboutUI::Hide();
     SettingsUI::Hide();
     SetSimSteeringOverrides(false);
     ReleaseDifferentialBraking();
